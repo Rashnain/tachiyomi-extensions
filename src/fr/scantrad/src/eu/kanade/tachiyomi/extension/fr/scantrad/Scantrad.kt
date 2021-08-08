@@ -41,8 +41,9 @@ class Scantrad : ParsedHttpSource() {
         .build()
 
     override fun headersBuilder(): Headers.Builder = Headers.Builder()
-        .add("User-Agent", "Mozilla/5.0 (Linux; Android 7.0; SM-G930VC Build/NRD90M; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/58.0.3029.83 Mobile Safari/537.36")
-        .add("Accept-Language", "fr")
+        .add("User-Agent", "Mozilla/5.0 (Linux; Android 8.0.0; PRA-LX1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.22 Mobile Safari/537.36")
+        .add("Referer", "https://scantrad.net/")
+        .add("Sec-Fetch-Site", "cross-site")
 
     // Popular
 
@@ -89,8 +90,8 @@ class Scantrad : ParsedHttpSource() {
     override fun latestUpdatesFromElement(element: Element): SManga {
         val manga = SManga.create()
 
-        manga.setUrlWithoutDomain(element.select("div.hmi-titre a").attr("abs:href"))
-        manga.title = element.select("div.hmi-titre a").text()
+        manga.setUrlWithoutDomain(element.select("a.hmi-titre").attr("abs:href"))
+        manga.title = element.select("a.hmi-titre").text()
         manga.thumbnail_url = element.select("a.hm-image img").attr("abs:data-src")
 
         return manga
@@ -126,13 +127,19 @@ class Scantrad : ParsedHttpSource() {
         val manga = SManga.create()
 
         document.select("div.mf-chapitre").let {
-            manga.author = it.select("div.titre div").text().substringAfter("de").trim()
-            //      manga.title = it.select("div.titre").text().removeSuffix(manga.author.orEmpty())
+            manga.author = it.select("div.titre-sub").text().substringAfter("de").trim()
             manga.description = it.select("div.new-main p").text()
             manga.thumbnail_url = it.select("div.ctt-img img").attr("abs:src")
             manga.status = parseStatus(it.select("div.sub-i").text())
-            val genres = it.select("div.sub-i").text().substringBefore("Status").substringAfter("Genre :")
-            manga.genre = genres.trim().replace(" ", ", ")
+            var genres = ""
+            it.select("span.snm-button").forEachIndexed { _, span ->
+                genres += "," + span.text()
+            }
+            manga.genre = genres
+                .substringBefore(",En cours")
+                .substringBefore(",Terminé")
+                .substringBefore(",Arrêté")
+                .substringAfter(",")
         }
 
         return manga
