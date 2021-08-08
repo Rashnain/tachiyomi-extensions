@@ -132,13 +132,13 @@ class Scantrad : ParsedHttpSource() {
             manga.status = parseStatus(it.select("div.sub-i").text())
             var genres = ""
             it.select("span.snm-button").forEachIndexed { _, span ->
-                genres += "," + span.text()
+                genres += ", " + span.text()
             }
             manga.genre = genres
-                .substringBefore(",En cours")
-                .substringBefore(",Terminé")
-                .substringBefore(",Arrêté")
-                .substringAfter(",")
+                .substringBefore(", En cours")
+                .substringBefore(", Terminé")
+                .substringBefore(", Arrêté")
+                .substringAfter(", ")
         }
 
         return manga
