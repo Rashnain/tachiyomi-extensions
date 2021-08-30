@@ -43,6 +43,9 @@ class Scantrad : ParsedHttpSource() {
     override fun headersBuilder(): Headers.Builder = Headers.Builder()
         .add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36")
         .add("Referer", "https://scantrad.net/")
+        .add("X-Requested-With", "eu.kanade.tachiyomi")
+        .add("Accept-Language", "fr-FR,en-US;q=0.9")
+        .add("Connection", "keep-alive")
 
     // Popular
 
