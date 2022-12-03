@@ -6,9 +6,12 @@ ext {
     extName = 'Bato.to'
     pkgNameSuffix = 'all.batoto'
     extClass = '.BatoToFactory'
-    extVersionCode = 13
-    libVersion = '1.2'
-    containsNsfw = true
+    extVersionCode = 30
+    isNsfw = true
 }
 
 apply from: "$rootDir/common.gradle"
+
+dependencies {
+    implementation(project(':lib-cryptoaes'))
+}

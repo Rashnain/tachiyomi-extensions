@@ -96,7 +96,7 @@ class MangaPark : ConfigurableSource, ParsedHttpSource() {
         }
 
         document.select(".attr > tbody > tr").forEach {
-            when (it.getElementsByTag("th").first().text().trim().toLowerCase()) {
+            when (it.getElementsByTag("th").first().text().trim().lowercase()) {
                 "author(s)" -> {
                     author = it.getElementsByTag("a").joinToString(transform = Element::text)
                 }
@@ -107,7 +107,7 @@ class MangaPark : ConfigurableSource, ParsedHttpSource() {
                     genre = it.getElementsByTag("a").joinToString(transform = Element::text)
                 }
                 "status" -> {
-                    status = when (it.getElementsByTag("td").text().trim().toLowerCase()) {
+                    status = when (it.getElementsByTag("td").text().trim().lowercase()) {
                         "ongoing" -> SManga.ONGOING
                         "completed" -> SManga.COMPLETED
                         else -> SManga.UNKNOWN
@@ -121,10 +121,10 @@ class MangaPark : ConfigurableSource, ParsedHttpSource() {
         // add alternative name to manga description
         val altName = "Alternative Name: "
         document.select(".attr > tbody > tr:contains(Alter) td").firstOrNull()?.ownText()?.let {
-            if (it.isEmpty().not()) {
-                description += when {
-                    description!!.isEmpty() -> altName + it
-                    else -> "\n\n$altName" + it
+            if (it.isBlank().not()) {
+                description = when {
+                    description.isNullOrBlank() -> altName + it
+                    else -> description + "\n\n$altName" + it
                 }
             }
         }
@@ -216,7 +216,7 @@ class MangaPark : ConfigurableSource, ParsedHttpSource() {
 
     @SuppressLint("DefaultLocale")
     private fun parseDate(date: String): Long {
-        val lcDate = date.toLowerCase()
+        val lcDate = date.lowercase()
         if (lcDate.endsWith("ago")) return parseRelativeDate(lcDate)
 
         // Handle 'yesterday' and 'today'

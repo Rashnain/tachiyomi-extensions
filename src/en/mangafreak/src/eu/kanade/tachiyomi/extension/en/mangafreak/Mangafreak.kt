@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.extension.en.mangafreak
 
-import android.net.Uri
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -8,6 +7,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.ParsedHttpSource
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -19,16 +19,21 @@ import java.util.concurrent.TimeUnit
 
 class Mangafreak : ParsedHttpSource() {
     override val name: String = "Mangafreak"
+
     override val lang: String = "en"
-    override val baseUrl: String = "https://w11.mangafreak.net"
+
+    override val baseUrl: String = "https://w14.mangafreak.net"
+
     override val supportsLatest: Boolean = true
+
+    private val floatLetterPattern = Regex("""(\d+)(\.\d+|[a-i]+\b)?""")
 
     override val client: OkHttpClient = network.cloudflareClient.newBuilder()
         .connectTimeout(1, TimeUnit.MINUTES)
         .readTimeout(1, TimeUnit.MINUTES)
         .retryOnConnectionFailure(true)
         .followRedirects(true)
-        .build()!!
+        .build()
 
     private fun mangaFromElement(element: Element, urlSelector: String): SManga {
         return SManga.create().apply {
@@ -45,7 +50,7 @@ class Mangafreak : ParsedHttpSource() {
     override fun popularMangaRequest(page: Int): Request {
         return GET("$baseUrl/Genre/All/$page", headers)
     }
-    override fun popularMangaNextPageSelector(): String? = "a.next_p"
+    override fun popularMangaNextPageSelector(): String = "a.next_p"
     override fun popularMangaSelector(): String = "div.ranking_item"
     override fun popularMangaFromElement(element: Element): SManga = mangaFromElement(element, "a")
 
@@ -54,7 +59,7 @@ class Mangafreak : ParsedHttpSource() {
     override fun latestUpdatesRequest(page: Int): Request {
         return GET("$baseUrl/Latest_Releases/$page", headers)
     }
-    override fun latestUpdatesNextPageSelector(): String? = popularMangaNextPageSelector()
+    override fun latestUpdatesNextPageSelector(): String = popularMangaNextPageSelector()
     override fun latestUpdatesSelector(): String = "div.latest_releases_item"
     override fun latestUpdatesFromElement(element: Element): SManga = SManga.create().apply {
         thumbnail_url = element.select("img").attr("abs:src").replace("mini", "manga").substringBeforeLast("/") + ".jpg"
@@ -67,34 +72,35 @@ class Mangafreak : ParsedHttpSource() {
     // Search
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val uri = Uri.parse(baseUrl).buildUpon()
-        if (!query.isBlank()) {
-            uri.appendPath("Search")
-                .appendPath(query)
+        val url = baseUrl.toHttpUrlOrNull()!!.newBuilder()
+
+        if (query.isNotBlank()) {
+            url.addPathSegments("Search/$query")
         }
+
         filters.forEach { filter ->
-            uri.appendPath("Genre")
             when (filter) {
-                is GenreList -> {
-                    uri.appendPath(
-                        filter.state.joinToString("") {
-                            when (it.state) {
-                                Filter.TriState.STATE_IGNORE -> "0"
-                                Filter.TriState.STATE_INCLUDE -> "1"
-                                Filter.TriState.STATE_EXCLUDE -> "2"
-                                else -> "0"
-                            }
+                is GenreFilter -> {
+                    val genres = filter.state.joinToString("") {
+                        when (it.state) {
+                            Filter.TriState.STATE_IGNORE -> "0"
+                            Filter.TriState.STATE_INCLUDE -> "1"
+                            Filter.TriState.STATE_EXCLUDE -> "2"
+                            else -> "0"
                         }
-                    )
+                    }
+                    url.addPathSegments("Genre/$genres")
                 }
+                is StatusFilter -> url.addPathSegments("Status/${filter.toUriPart()}")
+                is TypeFilter -> url.addPathSegments("Type/${filter.toUriPart()}")
             }
-            uri.appendEncodedPath("Status/0/Type/0")
         }
-        return GET(uri.toString(), headers)
+
+        return GET(url.toString(), headers)
     }
     override fun searchMangaNextPageSelector(): String? = null
     override fun searchMangaSelector(): String = "div.manga_search_item , div.mangaka_search_item"
-    override fun searchMangaFromElement(element: Element): SManga = mangaFromElement(element, "h3 a")
+    override fun searchMangaFromElement(element: Element): SManga = mangaFromElement(element, "h3 a, h5 a")
 
     // Details
 
@@ -114,12 +120,37 @@ class Mangafreak : ParsedHttpSource() {
 
     // Chapter
 
-    override fun chapterListSelector(): String = "div.manga_series_list tbody tr"
+    // HTML response does not actually include a tbody tag, must select tr directly
+    override fun chapterListSelector(): String = "div.manga_series_list tr:has(a)"
     override fun chapterFromElement(element: Element): SChapter = SChapter.create().apply {
-        name = element.select(" td:eq(0)").text()
-        chapter_number = name.substringAfter("Chapter ").substringBefore(" -").toFloat()
-        url = element.select("a").attr("href")
-        date_upload = parseDate(element.select(" td:eq(1)").text())
+        name = element.select("td:eq(0)").text()
+
+        /*
+         * 123 -> 123
+         * 123.4 -> 123.4
+         * 123e -> 123.5 (a=1, b=2, ...)
+         * j-z is undefined, assume straight substitution
+         */
+        val match = floatLetterPattern.find(name)
+        chapter_number = if (match == null) {
+            -1f
+        } else {
+            if (match.groupValues[2].isEmpty() || match.groupValues[2][0] == '.') {
+                match.value.toFloat()
+            } else {
+                val sb = StringBuilder("0.")
+                for (x in match.groupValues[2]) {
+                    sb.append(x.toInt() - 'a'.toInt() + 1)
+                }
+                val p2 = sb.toString().toFloat()
+                val p1 = match.groupValues[1].toFloat()
+
+                p1 + p2
+            }
+        }
+
+        setUrlWithoutDomain(element.select("a").attr("href"))
+        date_upload = parseDate(element.select("td:eq(1)").text())
     }
     private fun parseDate(date: String): Long {
         return SimpleDateFormat("yyyy/MM/dd", Locale.US).parse(date)?.time ?: 0L
@@ -131,7 +162,7 @@ class Mangafreak : ParsedHttpSource() {
     // Pages
 
     override fun pageListParse(document: Document): List<Page> = mutableListOf<Page>().apply {
-        document.select("img#gohere").forEachIndexed { index, element ->
+        document.select("img#gohere[src]").forEachIndexed { index, element ->
             add(Page(index, "", element.attr("abs:src")))
         }
     }
@@ -143,10 +174,13 @@ class Mangafreak : ParsedHttpSource() {
     // Filter
 
     private class Genre(name: String) : Filter.TriState(name)
-    private class GenreList(genres: List<Genre>) : Filter.Group<Genre>("Genres", genres)
+    private class GenreFilter(genres: List<Genre>) : Filter.Group<Genre>("Genres", genres)
 
     override fun getFilterList() = FilterList(
-        GenreList(getGenreList())
+        Filter.Header("Filters do not work if search bar is empty"),
+        GenreFilter(getGenreList()),
+        TypeFilter(),
+        StatusFilter()
     )
     private fun getGenreList() = listOf(
         Genre("Act"),
@@ -189,4 +223,27 @@ class Mangafreak : ParsedHttpSource() {
         Genre("Yaoi"),
         Genre("Yuri")
     )
+
+    private class TypeFilter : UriPartFilter(
+        "Manga Type",
+        arrayOf(
+            Pair("Both", "0"),
+            Pair("Manga", "2"),
+            Pair("Manhwa", "1")
+        )
+    )
+
+    private class StatusFilter : UriPartFilter(
+        "Manga Status",
+        arrayOf(
+            Pair("Both", "0"),
+            Pair("Completed", "1"),
+            Pair("Ongoing", "2")
+        )
+    )
+
+    private open class UriPartFilter(displayName: String, private val vals: Array<Pair<String, String>>) :
+        Filter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
+        fun toUriPart() = vals[state].second
+    }
 }

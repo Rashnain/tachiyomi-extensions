@@ -169,10 +169,10 @@ abstract class FMReader(
 
             // add alternative name to manga description
             infoElement.select(altNameSelector).firstOrNull()?.ownText()?.let {
-                if (it.isEmpty().not() && it.contains("Updating", true).not()) {
-                    description += when {
-                        description!!.isEmpty() -> altName + it
-                        else -> "\n\n$altName" + it
+                if (it.isBlank().not() && it.contains("Updating", true).not()) {
+                    description = when {
+                        description.isNullOrBlank() -> altName + it
+                        else -> description + "\n\n$altName" + it
                     }
                 }
             }
@@ -184,8 +184,16 @@ abstract class FMReader(
 
     // languages: en, vi, tr
     fun parseStatus(status: String?): Int {
-        val completedWords = setOf("completed", "complete", "incomplete", "đã hoàn thành", "tamamlandı", "hoàn thành")
-        val ongoingWords = setOf("ongoing", "on going", "updating", "chưa hoàn thành", "đang cập nhật", "devam ediyor", "Đang tiến hành")
+        val completedWords = setOf(
+            "completed", "complete", "incomplete",
+            "đã hoàn thành", "hoàn thành",
+            "tamamlandı"
+        )
+        val ongoingWords = setOf(
+            "ongoing", "on going", "updating",
+            "chưa hoàn thành", "đang cập nhật", "Đang tiến hành",
+            "devam ediyor", "Çevirisi Bırakıldı", "Çevirisi Yok"
+        )
         return when {
             status == null -> SManga.UNKNOWN
             completedWords.any { it.equals(status, ignoreCase = true) } -> SManga.COMPLETED
@@ -312,7 +320,6 @@ abstract class FMReader(
             Page(i, document.location(), img.decoded())
         }
     }
-
 
     override fun imageUrlParse(document: Document): String = throw UnsupportedOperationException("Not used")
 
@@ -471,5 +478,4 @@ abstract class FMReader(
         Genre("Western"),
         Genre("Zombies")
     )
-
 }

@@ -1,0 +1,13 @@
+apply plugin: 'com.android.application'
+apply plugin: 'kotlin-android'
+apply plugin: 'kotlinx-serialization'
+
+ext {
+    extName = 'ZinChanManga'
+    pkgNameSuffix = 'en.zinchanmanga'
+    extClass = '.ZinChanManga'
+    extVersionCode = 5
+    isNsfw = true
+}
+
+apply from: "$rootDir/common.gradle"

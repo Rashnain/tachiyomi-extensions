@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Rect
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.network.asObservable
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -13,24 +14,26 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.ParsedHttpSource
 import eu.kanade.tachiyomi.util.asJsoup
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.Call
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import rx.Observable
 import uy.kohesive.injekt.injectLazy
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
-import java.text.ParseException
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
@@ -48,7 +51,7 @@ abstract class GigaViewer(
     protected val dayOfWeek: String by lazy {
         Calendar.getInstance()
             .getDisplayName(Calendar.DAY_OF_WEEK, Calendar.LONG, Locale.US)!!
-            .toLowerCase(Locale.US)
+            .lowercase(Locale.US)
     }
 
     protected open val publisher: String = ""
@@ -64,8 +67,8 @@ abstract class GigaViewer(
     override fun popularMangaSelector(): String = "ul.series-list li a"
 
     override fun popularMangaFromElement(element: Element): SManga = SManga.create().apply {
-        title = element.select("h2.series-list-title").text()
-        thumbnail_url = element.select("div.series-list-thumb img")
+        title = element.selectFirst("h2.series-list-title").text()
+        thumbnail_url = element.selectFirst("div.series-list-thumb img")
             .attr("data-src")
         setUrlWithoutDomain(element.attr("href"))
     }
@@ -80,6 +83,13 @@ abstract class GigaViewer(
 
     override fun latestUpdatesNextPageSelector(): String? = null
 
+    // The search returns 404 when there's no results.
+    override fun fetchSearchManga(page: Int, query: String, filters: FilterList): Observable<MangasPage> {
+        return client.newCall(searchMangaRequest(page, query, filters))
+            .asObservableIgnoreCode(404)
+            .map(::searchMangaParse)
+    }
+
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotEmpty()) {
             val url = "$baseUrl/search".toHttpUrlOrNull()!!.newBuilder()
@@ -89,7 +99,8 @@ abstract class GigaViewer(
         }
 
         val collectionSelected = (filters[0] as CollectionFilter).selected
-        return GET("$baseUrl/series/${collectionSelected.path}", headers)
+        val collectionPath = if (collectionSelected.path.isBlank()) "" else "/" + collectionSelected.path
+        return GET("$baseUrl/series$collectionPath", headers)
     }
 
     override fun searchMangaParse(response: Response): MangasPage {
@@ -102,9 +113,9 @@ abstract class GigaViewer(
     override fun searchMangaSelector() = "ul.search-series-list li, ul.series-list li"
 
     override fun searchMangaFromElement(element: Element): SManga = SManga.create().apply {
-        title = element.select("div.title-box p.series-title").text()
-        thumbnail_url = element.select("div.thmb-container a img").attr("src")
-        setUrlWithoutDomain(element.select("div.thmb-container a").attr("href"))
+        title = element.selectFirst("div.title-box p.series-title").text()
+        thumbnail_url = element.selectFirst("div.thmb-container a img").attr("src")
+        setUrlWithoutDomain(element.selectFirst("div.thmb-container a").attr("href"))
     }
 
     override fun searchMangaNextPageSelector(): String? = null
@@ -112,23 +123,23 @@ abstract class GigaViewer(
     protected open fun mangaDetailsInfoSelector(): String = "section.series-information div.series-header"
 
     override fun mangaDetailsParse(document: Document): SManga = SManga.create().apply {
-        val infoElement = document.select(mangaDetailsInfoSelector()).first()!!
+        val infoElement = document.selectFirst(mangaDetailsInfoSelector())!!
 
-        title = infoElement.select("h1.series-header-title").text()
-        author = infoElement.select("h2.series-header-author").text()
+        title = infoElement.selectFirst("h1.series-header-title").text()
+        author = infoElement.selectFirst("h2.series-header-author").text()
         artist = author
-        description = infoElement.select("p.series-header-description").text()
-        thumbnail_url = infoElement.select("div.series-header-image-wrapper img")
+        description = infoElement.selectFirst("p.series-header-description").text()
+        thumbnail_url = infoElement.selectFirst("div.series-header-image-wrapper img")
             .attr("data-src")
     }
 
     override fun chapterListParse(response: Response): List<SChapter> {
         val document = response.asJsoup()
-        val readableProductList = document.select("div.js-readable-product-list").first()!!
-        val latestListEndpoint = readableProductList.attr("data-latest-list-endpoint")
-            .toHttpUrlOrNull()!!
+        val readableProductList = document.selectFirst("div.js-readable-product-list")!!
         val firstListEndpoint = readableProductList.attr("data-first-list-endpoint")
             .toHttpUrlOrNull()!!
+        val latestListEndpoint = readableProductList.attr("data-latest-list-endpoint")
+            .toHttpUrlOrNull() ?: firstListEndpoint
         val numberSince = latestListEndpoint.queryParameter("number_since")!!.toFloat()
             .coerceAtLeast(firstListEndpoint.queryParameter("number_since")!!.toFloat())
 
@@ -152,9 +163,9 @@ abstract class GigaViewer(
                 response.request.url.toString()
             )
 
-            chapters += tempDocument
+            tempDocument
                 .select("ul.series-episode-list " + chapterListSelector())
-                .map { element -> chapterFromElement(element) }
+                .mapTo(chapters) { element -> chapterFromElement(element) }
 
             request = GET(readMoreEndpoint, newHeaders)
             result = client.newCall(request).execute()
@@ -165,15 +176,22 @@ abstract class GigaViewer(
         return chapters
     }
 
-    override fun chapterListSelector() = "li.episode:has(span.series-episode-list-is-free)"
+    override fun chapterListSelector() = "li.episode"
+
+    protected open val chapterListMode = CHAPTER_LIST_PAID
 
     override fun chapterFromElement(element: Element): SChapter {
-        val info = element.select("a.series-episode-list-container").first() ?: element
+        val info = element.selectFirst("a.series-episode-list-container") ?: element
         val mangaUrl = element.ownerDocument().location()
 
         return SChapter.create().apply {
-            name = info.select("h4.series-episode-list-title").text()
-            date_upload = info.select("span.series-episode-list-date").first()
+            name = info.selectFirst("h4.series-episode-list-title").text()
+            if (chapterListMode == CHAPTER_LIST_PAID && element.selectFirst("span.series-episode-list-is-free") == null) {
+                name = YEN_BANKNOTE + name
+            } else if (chapterListMode == CHAPTER_LIST_LOCKED && element.hasClass("private")) {
+                name = LOCK + name
+            }
+            date_upload = info.selectFirst("span.series-episode-list-date")
                 ?.text().orEmpty()
                 .toDate()
             scanlator = publisher
@@ -182,9 +200,15 @@ abstract class GigaViewer(
     }
 
     override fun pageListParse(document: Document): List<Page> {
-        val episode = document.select("script#episode-json")
+        val episode = document.selectFirst("script#episode-json")
             .attr("data-value")
-            .let { json.decodeFromString<GigaViewerEpisodeDto>(it) }
+            .let {
+                try {
+                    json.decodeFromString<GigaViewerEpisodeDto>(it)
+                } catch (e: SerializationException) {
+                    throw Exception("このチャプターは非公開です\nChapter is not available!")
+                }
+            }
 
         return episode.readableProduct.pageStructure.pages
             .filter { it.type == "main" }
@@ -241,7 +265,7 @@ abstract class GigaViewer(
 
         val response = chain.proceed(request)
         val image = decodeImage(response.body!!.byteStream(), width, height)
-        val body = image.toResponseBody("image/png".toMediaTypeOrNull())
+        val body = image.toResponseBody(jpegMediaType)
 
         response.close()
 
@@ -273,16 +297,22 @@ abstract class GigaViewer(
         }
 
         val output = ByteArrayOutputStream()
-        result.compress(Bitmap.CompressFormat.PNG, 100, output)
+        result.compress(Bitmap.CompressFormat.JPEG, 90, output)
         return output.toByteArray()
     }
 
-    private fun String.toDate(): Long {
-        return try {
-            DATE_PARSER.parse(this)?.time ?: 0L
-        } catch (e: ParseException) {
-            0L
+    private fun Call.asObservableIgnoreCode(code: Int): Observable<Response> {
+        return asObservable().doOnNext { response ->
+            if (!response.isSuccessful && response.code != code) {
+                response.close()
+                throw Exception("HTTP error ${response.code}")
+            }
         }
+    }
+
+    private fun String.toDate(): Long {
+        return runCatching { DATE_PARSER.parse(this)?.time }
+            .getOrNull() ?: 0L
     }
 
     companion object {
@@ -290,5 +320,12 @@ abstract class GigaViewer(
 
         private const val DIVIDE_NUM = 4
         private const val MULTIPLE = 8
+        private val jpegMediaType = "image/jpeg".toMediaType()
+
+        const val CHAPTER_LIST_PAID = 0
+        const val CHAPTER_LIST_LOCKED = 1
+
+        private const val YEN_BANKNOTE = "💴 "
+        private const val LOCK = "🔒 "
     }
 }

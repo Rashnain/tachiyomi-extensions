@@ -157,10 +157,10 @@ abstract class MangaBox(
 
             // add alternative name to manga description
             document.select(altNameSelector).firstOrNull()?.ownText()?.let {
-                if (it.isEmpty().not()) {
-                    description += when {
-                        description!!.isEmpty() -> altName + it
-                        else -> "\n\n$altName" + it
+                if (it.isBlank().not()) {
+                    description = when {
+                        description.isNullOrBlank() -> altName + it
+                        else -> description + "\n\n$altName" + it
                     }
                 }
             }
@@ -271,7 +271,7 @@ abstract class MangaBox(
     // Based on change_alias JS function from Mangakakalot's website
     @SuppressLint("DefaultLocale")
     open fun normalizeSearchQuery(query: String): String {
-        var str = query.toLowerCase()
+        var str = query.lowercase()
         str = str.replace("[àáạảãâầấậẩẫăằắặẳẵ]".toRegex(), "a")
         str = str.replace("[èéẹẻẽêềếệểễ]".toRegex(), "e")
         str = str.replace("[ìíịỉĩ]".toRegex(), "i")

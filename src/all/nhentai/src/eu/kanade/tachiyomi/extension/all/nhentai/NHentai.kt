@@ -8,9 +8,9 @@ import eu.kanade.tachiyomi.extension.all.nhentai.NHUtils.getNumPages
 import eu.kanade.tachiyomi.extension.all.nhentai.NHUtils.getTagDescription
 import eu.kanade.tachiyomi.extension.all.nhentai.NHUtils.getTags
 import eu.kanade.tachiyomi.extension.all.nhentai.NHUtils.getTime
-import eu.kanade.tachiyomi.lib.ratelimit.RateLimitInterceptor
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.asObservableSuccess
+import eu.kanade.tachiyomi.network.interceptor.rateLimit
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -20,6 +20,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.ParsedHttpSource
 import eu.kanade.tachiyomi.util.asJsoup
+import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -37,14 +38,19 @@ open class NHentai(
 
     final override val baseUrl = "https://nhentai.net"
 
+    override val id by lazy { if (lang == "all") 7309872737163460316 else super.id }
+
     override val name = "NHentai"
 
     override val supportsLatest = true
 
-    private val rateLimitInterceptor = RateLimitInterceptor(4)
     override val client: OkHttpClient = network.cloudflareClient.newBuilder()
-        .addNetworkInterceptor(rateLimitInterceptor)
+        .rateLimit(4)
         .build()
+
+    override fun headersBuilder(): Headers.Builder =
+        super.headersBuilder()
+            .set("User-Agent", USER_AGENT)
 
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
@@ -83,7 +89,7 @@ open class NHentai(
 
     override fun latestUpdatesRequest(page: Int) = GET(if (nhLang.isBlank()) "$baseUrl/?page=$page" else "$baseUrl/language/$nhLang/?page=$page", headers)
 
-    override fun latestUpdatesSelector() = "#content .gallery"
+    override fun latestUpdatesSelector() = "#content .container:not(.index-popular) .gallery"
 
     override fun latestUpdatesFromElement(element: Element) = SManga.create().apply {
         setUrlWithoutDomain(element.select("a").attr("href"))
@@ -97,7 +103,7 @@ open class NHentai(
 
     override fun latestUpdatesNextPageSelector() = "#content > section.pagination > a.next"
 
-    override fun popularMangaRequest(page: Int) = GET(if (nhLang.isBlank()) "$baseUrl/?page=$page" else "$baseUrl/language/$nhLang/popular?page=$page", headers)
+    override fun popularMangaRequest(page: Int) = GET(if (nhLang.isBlank()) "$baseUrl/search/?q=\"\"&sort=popular&page=$page" else "$baseUrl/language/$nhLang/popular?page=$page", headers)
 
     override fun popularMangaFromElement(element: Element) = latestUpdatesFromElement(element)
 
@@ -113,7 +119,7 @@ open class NHentai(
                     .asObservableSuccess()
                     .map { response -> searchMangaByIdParse(response, id) }
             }
-            query.isQueryIdNumbers() -> {
+            query.toIntOrNull() != null -> {
                 client.newCall(searchMangaByIdRequest(query))
                     .asObservableSuccess()
                     .map { response -> searchMangaByIdParse(response, query) }
@@ -122,29 +128,26 @@ open class NHentai(
         }
     }
 
-    // The website redirects for any number <= 400000
-    private fun String.isQueryIdNumbers(): Boolean {
-        val int = this.toIntOrNull() ?: return false
-        return int <= 400000
-    }
-
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        val fixedQuery = query.ifEmpty { "\"\"" }
         val filterList = if (filters.isEmpty()) getFilterList() else filters
         val nhLangSearch = if (nhLang.isBlank()) "" else "+$nhLang "
         val advQuery = combineQuery(filterList)
         val favoriteFilter = filterList.findInstance<FavoriteFilter>()
         val isOkayToSort = filterList.findInstance<UploadedFilter>()?.state?.isBlank() ?: true
+        val offsetPage =
+            filterList.findInstance<OffsetPageFilter>()?.state?.toIntOrNull()?.plus(page) ?: page
 
         if (favoriteFilter?.state == true) {
             val url = "$baseUrl/favorites".toHttpUrlOrNull()!!.newBuilder()
-                .addQueryParameter("q", "$query $advQuery")
-                .addQueryParameter("page", page.toString())
+                .addQueryParameter("q", "$fixedQuery $advQuery")
+                .addQueryParameter("page", offsetPage.toString())
 
             return GET(url.toString(), headers)
         } else {
             val url = "$baseUrl/search".toHttpUrlOrNull()!!.newBuilder()
-                .addQueryParameter("q", "$query $nhLangSearch$advQuery")
-                .addQueryParameter("page", page.toString())
+                .addQueryParameter("q", "$fixedQuery $nhLangSearch$advQuery")
+                .addQueryParameter("page", offsetPage.toString())
 
             if (isOkayToSort) {
                 filterList.findInstance<SortFilter>()?.let { f ->
@@ -241,8 +244,11 @@ open class NHentai(
     override fun chapterListSelector() = throw UnsupportedOperationException("Not used")
 
     override fun pageListParse(document: Document): List<Page> {
+        val script = document.select("script:containsData(media_server)").first().data()
+        val media_server = Regex("""media_server\s*:\s*(\d+)""").find(script)?.groupValues!!.get(1)
+
         return document.select("div.thumbs a > img").mapIndexed { i, img ->
-            Page(i, "", img.attr("abs:data-src").replace("t.nh", "i.nh").replace("t.", "."))
+            Page(i, "", img.attr("abs:data-src").replace("t.nh", "i.nh").replace("t\\d+.nh".toRegex(), "i$media_server.nh").replace("t.", "."))
         }
     }
 
@@ -263,6 +269,7 @@ open class NHentai(
 
         Filter.Separator(),
         SortFilter(),
+        OffsetPageFilter(),
         Filter.Header("Sort is ignored if favorites only"),
         FavoriteFilter()
     )
@@ -276,6 +283,8 @@ open class NHentai(
     class UploadedFilter : AdvSearchEntryFilter("Uploaded")
     class PagesFilter : AdvSearchEntryFilter("Pages")
     open class AdvSearchEntryFilter(name: String) : Filter.Text(name)
+
+    class OffsetPageFilter : Filter.Text("Offset results by # pages")
 
     override fun imageUrlParse(document: Document) = throw UnsupportedOperationException("Not used")
 
@@ -301,5 +310,6 @@ open class NHentai(
     companion object {
         const val PREFIX_ID_SEARCH = "id:"
         private const val TITLE_PREF = "Display manga title as:"
+        private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/106.0.0.0 Mobile Safari/537.36"
     }
 }

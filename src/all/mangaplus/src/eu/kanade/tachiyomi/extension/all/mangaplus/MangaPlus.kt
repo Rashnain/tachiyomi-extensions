@@ -2,11 +2,12 @@ package eu.kanade.tachiyomi.extension.all.mangaplus
 
 import android.app.Application
 import android.content.SharedPreferences
-import android.os.Build
-import com.google.gson.Gson
-import com.squareup.duktape.Duktape
+import androidx.preference.ListPreference
+import androidx.preference.PreferenceScreen
+import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.asObservableSuccess
+import eu.kanade.tachiyomi.network.interceptor.rateLimitHost
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -14,25 +15,24 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
-import kotlinx.serialization.decodeFromByteArray
-import kotlinx.serialization.protobuf.ProtoBuf
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 import okhttp3.Headers
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
-import okhttp3.ResponseBody
+import okhttp3.ResponseBody.Companion.toResponseBody
 import rx.Observable
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
+import uy.kohesive.injekt.injectLazy
 import java.util.UUID
-import androidx.preference.CheckBoxPreference as AndroidXCheckBoxPreference
-import androidx.preference.ListPreference as AndroidXListPreference
-import androidx.preference.PreferenceScreen as AndroidXPreferenceScreen
 
-abstract class MangaPlus(
+class MangaPlus(
     override val lang: String,
     private val internalLang: String,
     private val langCode: Language
@@ -51,26 +51,25 @@ abstract class MangaPlus(
         .add("Session-Token", UUID.randomUUID().toString())
 
     override val client: OkHttpClient = network.client.newBuilder()
-        .addInterceptor { imageIntercept(it) }
-        .addInterceptor { thumbnailIntercept(it) }
+        .addInterceptor(::imageIntercept)
+        .addInterceptor(::thumbnailIntercept)
+        .rateLimitHost(API_URL.toHttpUrl(), 1)
+        .rateLimitHost(baseUrl.toHttpUrl(), 2)
         .build()
 
-    private val protobufJs: String by lazy {
-        val request = GET(PROTOBUFJS_CDN, headers)
-        client.newCall(request).execute().body!!.string()
-    }
+    private val json: Json by injectLazy()
 
-    private val gson: Gson by lazy { Gson() }
+    private val intl by lazy { MangaPlusIntl(langCode) }
 
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
-    private val imageResolution: String
-        get() = preferences.getString("${RESOLUTION_PREF_KEY}_$lang", RESOLUTION_PREF_DEFAULT_VALUE)!!
+    private val imageQuality: String
+        get() = preferences.getString("${QUALITY_PREF_KEY}_$lang", QUALITY_PREF_DEFAULT_VALUE)!!
 
-    private val splitImages: String
-        get() = if (preferences.getBoolean("${SPLIT_PREF_KEY}_$lang", SPLIT_PREF_DEFAULT_VALUE)) "yes" else "no"
+    private val splitImages: Boolean
+        get() = preferences.getBoolean("${SPLIT_PREF_KEY}_$lang", SPLIT_PREF_DEFAULT_VALUE)
 
     private var titleList: List<Title>? = null
 
@@ -79,25 +78,20 @@ abstract class MangaPlus(
             .set("Referer", "$baseUrl/manga_list/hot")
             .build()
 
-        return GET("$API_URL/title_list/ranking", newHeaders)
+        return GET("$API_URL/title_list/ranking?format=json", newHeaders)
     }
 
     override fun popularMangaParse(response: Response): MangasPage {
-        val result = response.asProto()
+        val result = response.asMangaPlusResponse()
 
-        if (result.success == null)
-            throw Exception(result.error!!.langPopup.body)
+        checkNotNull(result.success) {
+            result.error!!.langPopup(langCode)?.body ?: intl.unknownError
+        }
 
         titleList = result.success.titleRankingView!!.titles
             .filter { it.language == langCode }
 
-        val mangas = titleList!!.map {
-            SManga.create().apply {
-                title = it.name
-                thumbnail_url = it.portraitImageUrl
-                url = "#/titles/${it.titleId}"
-            }
-        }
+        val mangas = titleList!!.map(Title::toSManga)
 
         return MangasPage(mangas, false)
     }
@@ -107,17 +101,19 @@ abstract class MangaPlus(
             .set("Referer", "$baseUrl/updates")
             .build()
 
-        return GET("$API_URL/web/web_homeV3?lang=$internalLang", newHeaders)
+        return GET("$API_URL/web/web_homeV3?lang=$internalLang&format=json", newHeaders)
     }
 
     override fun latestUpdatesParse(response: Response): MangasPage {
-        val result = response.asProto()
+        val result = response.asMangaPlusResponse()
 
-        if (result.success == null)
-            throw Exception(result.error!!.langPopup.body)
+        checkNotNull(result.success) {
+            result.error!!.langPopup(langCode)?.body ?: intl.unknownError
+        }
 
-        // Fetch all titles to get newer thumbnail urls at the interceptor.
-        val popularResponse = client.newCall(popularMangaRequest(1)).execute().asProto()
+        // Fetch all titles to get newer thumbnail URLs in the interceptor.
+        val popularResponse = client.newCall(popularMangaRequest(1)).execute()
+            .asMangaPlusResponse()
 
         if (popularResponse.success != null) {
             titleList = popularResponse.success.titleRankingView!!.titles
@@ -125,79 +121,88 @@ abstract class MangaPlus(
         }
 
         val mangas = result.success.webHomeViewV3!!.groups
-            .flatMap { it.titleGroups }
-            .flatMap { it.titles }
-            .map { it.title }
+            .flatMap(UpdatedTitleV2Group::titleGroups)
+            .flatMap(OriginalTitleGroup::titles)
+            .map(UpdatedTitle::title)
             .filter { it.language == langCode }
-            .map {
-                SManga.create().apply {
-                    title = it.name
-                    thumbnail_url = it.portraitImageUrl
-                    url = "#/titles/${it.titleId}"
-                }
-            }
-            .distinctBy { it.title }
+            .map(Title::toSManga)
+            .distinctBy(SManga::title)
 
         return MangasPage(mangas, false)
     }
 
-    override fun fetchSearchManga(page: Int, query: String, filters: FilterList): Observable<MangasPage> {
-        return super.fetchSearchManga(page, query, filters)
-            .map {
-                if (it.mangas.size == 1) {
-                    return@map it
-                }
-
-                val filteredResult = it.mangas.filter { m -> m.title.contains(query, true) }
-                MangasPage(filteredResult, it.hasNextPage)
-            }
-    }
-
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        if (query.startsWith(PREFIX_ID_SEARCH) && query.matches(ID_SEARCH_PATTERN)) {
+        if (query.matches(ID_SEARCH_PATTERN)) {
             return titleDetailsRequest(query.removePrefix(PREFIX_ID_SEARCH))
+        } else if (query.matches(CHAPTER_ID_SEARCH_PATTERN)) {
+            return mangaViewerRequest(query.removePrefix(PREFIX_CHAPTER_ID_SEARCH))
         }
 
         val newHeaders = headersBuilder()
             .set("Referer", "$baseUrl/manga_list/all")
             .build()
 
-        return GET("$API_URL/title_list/allV2", newHeaders)
+        val apiUrl = "$API_URL/title_list/allV2".toHttpUrl().newBuilder()
+            .addQueryParameter("filter", query.trim())
+            .addQueryParameter("format", "json")
+
+        return GET(apiUrl.toString(), newHeaders)
     }
 
     override fun searchMangaParse(response: Response): MangasPage {
-        val result = response.asProto()
+        val result = response.asMangaPlusResponse()
 
-        if (result.success == null)
-            throw Exception(result.error!!.langPopup.body)
+        checkNotNull(result.success) {
+            result.error!!.langPopup(langCode)?.body ?: intl.unknownError
+        }
 
         if (result.success.titleDetailView != null) {
             val mangaPlusTitle = result.success.titleDetailView.title
+                .takeIf { it.language == langCode }
+                ?: return MangasPage(emptyList(), hasNextPage = false)
 
-            if (mangaPlusTitle.language == langCode) {
-                val manga = SManga.create().apply {
-                    title = mangaPlusTitle.name
-                    thumbnail_url = mangaPlusTitle.portraitImageUrl
-                    url = "#/titles/${mangaPlusTitle.titleId}"
+            return MangasPage(listOf(mangaPlusTitle.toSManga()), hasNextPage = false)
+        }
+
+        if (result.success.mangaViewer != null) {
+            checkNotNull(result.success.mangaViewer.titleId) { intl.chapterExpired }
+
+            val titleId = result.success.mangaViewer.titleId
+            val cacheTitle = titleList.orEmpty().firstOrNull { it.titleId == titleId }
+
+            val manga = if (cacheTitle != null) {
+                SManga.create().apply {
+                    title = result.success.mangaViewer.titleName!!
+                    thumbnail_url = cacheTitle.portraitImageUrl
+                    url = "#/titles/$titleId"
+                }
+            } else {
+                val titleRequest = titleDetailsRequest(titleId.toString())
+                val titleResult = client.newCall(titleRequest).execute().asMangaPlusResponse()
+
+                checkNotNull(titleResult.success) {
+                    titleResult.error!!.langPopup(langCode)?.body ?: intl.unknownError
                 }
 
-                return MangasPage(listOf(manga), hasNextPage = false)
+                titleResult.success.titleDetailView!!
+                    .takeIf { it.title.language == langCode }
+                    ?.toSManga()
             }
 
-            return MangasPage(emptyList(), hasNextPage = false)
+            return MangasPage(listOfNotNull(manga), hasNextPage = false)
         }
+
+        val filter = response.request.url.queryParameter("filter").orEmpty()
 
         titleList = result.success.allTitlesViewV2!!.allTitlesGroup
-            .flatMap { it.titles }
+            .flatMap(AllTitlesGroup::titles)
             .filter { it.language == langCode }
-
-        val mangas = titleList!!.map {
-            SManga.create().apply {
-                title = it.name
-                thumbnail_url = it.portraitImageUrl
-                url = "#/titles/${it.titleId}"
+            .filter { title ->
+                title.name.contains(filter, ignoreCase = true) ||
+                    title.author.orEmpty().contains(filter, ignoreCase = true)
             }
-        }
+
+        val mangas = titleList!!.map(Title::toSManga)
 
         return MangasPage(mangas, hasNextPage = false)
     }
@@ -209,7 +214,7 @@ abstract class MangaPlus(
             .set("Referer", "$baseUrl/titles/$titleId")
             .build()
 
-        return GET("$API_URL/title_detail?title_id=$titleId", newHeaders)
+        return GET("$API_URL/title_detail?title_id=$titleId&format=json", newHeaders)
     }
 
     // Workaround to allow "Open in browser" use the real URL.
@@ -227,31 +232,39 @@ abstract class MangaPlus(
     }
 
     override fun mangaDetailsParse(response: Response): SManga {
-        val result = response.asProto()
+        val result = response.asMangaPlusResponse()
 
-        if (result.success == null)
-            throw Exception(result.error!!.langPopup.body)
+        checkNotNull(result.success) {
+            val error = result.error!!.langPopup(langCode)
 
-        val details = result.success.titleDetailView!!
-        val title = details.title
-        val isCompleted = details.nonAppearanceInfo.contains(COMPLETE_REGEX)
-
-        return SManga.create().apply {
-            author = title.author.replace(" / ", ", ")
-            artist = author
-            description = details.overview + "\n\n" + details.viewingPeriodDescription
-            status = if (isCompleted) SManga.COMPLETED else SManga.ONGOING
-            thumbnail_url = title.portraitImageUrl
+            when {
+                error?.subject == NOT_FOUND_SUBJECT -> intl.titleRemoved
+                !error?.body.isNullOrEmpty() -> error!!.body
+                else -> intl.unknownError
+            }
         }
+
+        val titleDetails = result.success.titleDetailView!!
+            .takeIf { it.title.language == langCode }
+            ?: throw Exception(intl.notAvailable)
+
+        return titleDetails.toSManga()
     }
 
     override fun chapterListRequest(manga: SManga): Request = titleDetailsRequest(manga.url)
 
     override fun chapterListParse(response: Response): List<SChapter> {
-        val result = response.asProto()
+        val result = response.asMangaPlusResponse()
 
-        if (result.success == null)
-            throw Exception(result.error!!.langPopup.body)
+        checkNotNull(result.success) {
+            val error = result.error!!.langPopup(langCode)
+
+            when {
+                error?.subject == NOT_FOUND_SUBJECT -> intl.titleRemoved
+                !error?.body.isNullOrEmpty() -> error!!.body
+                else -> intl.unknownError
+            }
+        }
 
         val titleDetailView = result.success.titleDetailView!!
 
@@ -260,46 +273,50 @@ abstract class MangaPlus(
         return chapters.reversed()
             // If the subTitle is null, then the chapter time expired.
             .filter { it.subTitle != null }
-            .map {
-                SChapter.create().apply {
-                    name = "${it.name} - ${it.subTitle}"
-                    scanlator = "Shueisha"
-                    date_upload = 1000L * it.startTimeStamp
-                    url = "#/viewer/${it.chapterId}"
-                    chapter_number = it.name.substringAfter("#").toFloatOrNull() ?: -1f
-                }
-            }
+            .map(Chapter::toSChapter)
     }
 
     override fun pageListRequest(chapter: SChapter): Request {
         val chapterId = chapter.url.substringAfterLast("/")
 
+        return mangaViewerRequest(chapterId)
+    }
+
+    private fun mangaViewerRequest(chapterId: String): Request {
         val newHeaders = headersBuilder()
             .set("Referer", "$baseUrl/viewer/$chapterId")
             .build()
 
         val url = "$API_URL/manga_viewer".toHttpUrlOrNull()!!.newBuilder()
             .addQueryParameter("chapter_id", chapterId)
-            .addQueryParameter("split", splitImages)
-            .addQueryParameter("img_quality", imageResolution)
+            .addQueryParameter("split", if (splitImages) "yes" else "no")
+            .addQueryParameter("img_quality", imageQuality)
+            .addQueryParameter("format", "json")
             .toString()
 
         return GET(url, newHeaders)
     }
 
     override fun pageListParse(response: Response): List<Page> {
-        val result = response.asProto()
+        val result = response.asMangaPlusResponse()
 
-        if (result.success == null)
-            throw Exception(result.error!!.langPopup.body)
+        checkNotNull(result.success) {
+            val error = result.error!!.langPopup(langCode)
+
+            when {
+                error?.subject == NOT_FOUND_SUBJECT -> intl.chapterExpired
+                !error?.body.isNullOrEmpty() -> error!!.body
+                else -> intl.unknownError
+            }
+        }
 
         val referer = response.request.header("Referer")!!
 
         return result.success.mangaViewer!!.pages
-            .mapNotNull { it.page }
+            .mapNotNull(MangaPlusPage::mangaPage)
             .mapIndexed { i, page ->
-                val encryptionKey = if (page.encryptionKey == null) "" else "&encryptionKey=${page.encryptionKey}"
-                Page(i, referer, "${page.imageUrl}$encryptionKey")
+                val encryptionKey = if (page.encryptionKey == null) "" else "#${page.encryptionKey}"
+                Page(i, referer, page.imageUrl + encryptionKey)
             }
     }
 
@@ -316,82 +333,43 @@ abstract class MangaPlus(
         return GET(page.imageUrl!!, newHeaders)
     }
 
-    override fun setupPreferenceScreen(screen: AndroidXPreferenceScreen) {
-        val resolutionPref = AndroidXListPreference(screen.context).apply {
-            key = "${RESOLUTION_PREF_KEY}_$lang"
-            title = RESOLUTION_PREF_TITLE
-            entries = RESOLUTION_PREF_ENTRIES
-            entryValues = RESOLUTION_PREF_ENTRY_VALUES
-            setDefaultValue(RESOLUTION_PREF_DEFAULT_VALUE)
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        val qualityPref = ListPreference(screen.context).apply {
+            key = "${QUALITY_PREF_KEY}_$lang"
+            title = intl.imageQuality
+            entries = arrayOf(intl.imageQualityLow, intl.imageQualityMedium, intl.imageQualityHigh)
+            entryValues = QUALITY_PREF_ENTRY_VALUES
+            setDefaultValue(QUALITY_PREF_DEFAULT_VALUE)
             summary = "%s"
-
-            setOnPreferenceChangeListener { _, newValue ->
-                val selected = newValue as String
-                val index = findIndexOfValue(selected)
-                val entry = entryValues[index] as String
-                preferences.edit().putString("${RESOLUTION_PREF_KEY}_$lang", entry).commit()
-            }
         }
-        val splitPref = AndroidXCheckBoxPreference(screen.context).apply {
+
+        val splitPref = SwitchPreferenceCompat(screen.context).apply {
             key = "${SPLIT_PREF_KEY}_$lang"
-            title = SPLIT_PREF_TITLE
-            summary = SPLIT_PREF_SUMMARY
+            title = intl.splitDoublePages
+            summary = intl.splitDoublePagesSummary
             setDefaultValue(SPLIT_PREF_DEFAULT_VALUE)
-
-            setOnPreferenceChangeListener { _, newValue ->
-                val checkValue = newValue as Boolean
-                preferences.edit().putBoolean("${SPLIT_PREF_KEY}_$lang", checkValue).commit()
-            }
         }
 
-        screen.addPreference(resolutionPref)
+        screen.addPreference(qualityPref)
         screen.addPreference(splitPref)
     }
 
     private fun imageIntercept(chain: Interceptor.Chain): Response {
-        var request = chain.request()
-
-        if (request.url.queryParameter("encryptionKey") == null)
-            return chain.proceed(request)
-
-        val encryptionKey = request.url.queryParameter("encryptionKey")!!
-
-        // Change the url and remove the encryptionKey to avoid detection.
-        val newUrl = request.url.newBuilder()
-            .removeAllQueryParameters("encryptionKey")
-            .build()
-        request = request.newBuilder()
-            .url(newUrl)
-            .build()
-
+        val request = chain.request()
         val response = chain.proceed(request)
+        val encryptionKey = request.url.fragment
+
+        if (encryptionKey.isNullOrEmpty()) {
+            return response
+        }
 
         val contentType = response.header("Content-Type", "image/jpeg")!!
-        val image = decodeImage(encryptionKey, response.body!!.bytes())
-        val body = ResponseBody.create(contentType.toMediaTypeOrNull(), image)
+        val image = response.body!!.bytes().decodeXorCipher(encryptionKey)
+        val body = image.toResponseBody(contentType.toMediaTypeOrNull())
 
         return response.newBuilder()
             .body(body)
             .build()
-    }
-
-    private fun decodeImage(encryptionKey: String, image: ByteArray): ByteArray {
-        val keyStream = HEX_GROUP
-            .findAll(encryptionKey)
-            .toList()
-            .map { it.groupValues[1].toInt(16) }
-
-        val content = image
-            .map { it.toInt() }
-            .toMutableList()
-
-        val blockSizeInBytes = keyStream.size
-
-        for ((i, value) in content.iterator().withIndex()) {
-            content[i] = value xor keyStream[i % blockSizeInBytes]
-        }
-
-        return ByteArray(content.size) { pos -> content[pos].toByte() }
     }
 
     private fun thumbnailIntercept(chain: Interceptor.Chain): Response {
@@ -416,59 +394,38 @@ abstract class MangaPlus(
         return response
     }
 
-    private val ErrorResult.langPopup: Popup
-        get() = when (internalLang) {
-            "esp" -> spanishPopup
-            else -> englishPopup
-        }
+    private fun ByteArray.decodeXorCipher(key: String): ByteArray {
+        val keyStream = key.chunked(2)
+            .map { it.toInt(16) }
 
-    private fun Response.asProto(): MangaPlusResponse {
-        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.M)
-            return ProtoBuf.decodeFromByteArray(body!!.bytes())
+        return mapIndexed { i, byte -> byte.toInt() xor keyStream[i % keyStream.size] }
+            .map(Int::toByte)
+            .toByteArray()
+    }
 
-        // The kotlinx.serialization library eventually always have some issues with
-        // devices with Android version below Nougat. So, if the device is running Android 6.x,
-        // the deserialization is done using ProtobufJS + Duktape + Gson.
-
-        val bytes = body!!.bytes()
-        val messageBytes = "var BYTE_ARR = new Uint8Array([${bytes.joinToString()}]);"
-
-        val res = Duktape.create().use {
-            // The current Kotlin version brokes Duktape's module feature,
-            // so we need to provide an workaround to prevent the usage of 'require'.
-            it.evaluate("var module = { exports: true };")
-            it.evaluate(protobufJs)
-            it.evaluate(messageBytes + DECODE_SCRIPT) as String
-        }
-
-        return gson.fromJson(res, MangaPlusResponse::class.java)
+    private fun Response.asMangaPlusResponse(): MangaPlusResponse = use {
+        json.decodeFromString(body!!.string())
     }
 
     companion object {
         private const val API_URL = "https://jumpg-webapi.tokyo-cdn.com/api"
         private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.131 Safari/537.36"
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/106.0.0.0 Safari/537.36"
 
-        private val HEX_GROUP = "(.{1,2})".toRegex()
-
-        private const val PROTOBUFJS_CDN = "https://cdn.jsdelivr.net/npm/protobufjs@6.10.1/dist/light/protobuf.js"
-
-        private const val RESOLUTION_PREF_KEY = "imageResolution"
-        private const val RESOLUTION_PREF_TITLE = "Image resolution"
-        private val RESOLUTION_PREF_ENTRIES = arrayOf("Low resolution", "Medium resolution", "High resolution")
-        private val RESOLUTION_PREF_ENTRY_VALUES = arrayOf("low", "high", "super_high")
-        private val RESOLUTION_PREF_DEFAULT_VALUE = RESOLUTION_PREF_ENTRY_VALUES[2]
+        private const val QUALITY_PREF_KEY = "imageResolution"
+        private val QUALITY_PREF_ENTRY_VALUES = arrayOf("low", "high", "super_high")
+        private val QUALITY_PREF_DEFAULT_VALUE = QUALITY_PREF_ENTRY_VALUES[2]
 
         private const val SPLIT_PREF_KEY = "splitImage"
-        private const val SPLIT_PREF_TITLE = "Split double pages"
-        private const val SPLIT_PREF_SUMMARY = "Not all titles support disabling this."
         private const val SPLIT_PREF_DEFAULT_VALUE = true
 
-        private val COMPLETE_REGEX = "completado|complete".toRegex()
+        private const val NOT_FOUND_SUBJECT = "Not Found"
 
         private const val TITLE_THUMBNAIL_PATH = "title_thumbnail_portrait_list"
 
         const val PREFIX_ID_SEARCH = "id:"
         private val ID_SEARCH_PATTERN = "^id:(\\d+)$".toRegex()
+        const val PREFIX_CHAPTER_ID_SEARCH = "chapter-id:"
+        private val CHAPTER_ID_SEARCH_PATTERN = "^chapter-id:(\\d+)$".toRegex()
     }
 }

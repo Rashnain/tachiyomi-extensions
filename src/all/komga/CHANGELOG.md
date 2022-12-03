@@ -1,3 +1,128 @@
+## 1.3.43
+
+Minimum Komga version required: `0.151.0`
+
+### Fix
+
+* Requests failing if address preference is saved with a trailing slash
+
+### Features
+
+* Add URL validation in the address preferences
+* Use a URL-focused keyboard when available while editing the address preferences
+
+## 1.3.42
+
+Minimum Komga version required: `0.151.0`
+
+### Fix
+
+* default sort broken since Komga 0.155.1
+* proper sort criteria for readlists
+
+## 1.3.41
+
+Minimum Komga version required: `0.151.0`
+
+### Features
+
+* Improve how the status is displayed
+
+## 1.3.40
+
+Minimum Komga version required: `0.151.0`
+
+### Features
+
+* Exclude from bulk update warnings
+
+## 1.2.39
+
+Minimum Komga version required: `0.151.0`
+
+### Features
+
+* Prepend series name in front of books within readlists
+
+## 1.2.38
+
+Minimum Komga version required: `0.113.0`
+
+### Features
+
+* Add `README.md`
+
+## 1.2.37
+
+Minimum Komga version required: `0.113.0`
+
+### Features
+
+* In app link to `CHANGELOG.md`
+
+## 1.2.36
+
+Minimum Komga version required: `0.113.0`
+
+### Features
+
+* Don't request conversion for JPEG XL images
+
+## 1.2.35
+
+Minimum Komga version required: `0.113.0`
+
+### Features
+
+* Display the Translators of a book in the scanlator chapter field
+
+## 1.2.34
+
+Minimum Komga version required: `0.113.0`
+
+### Fix
+
+* Loading of filter values could fail in some cases
+
+## 1.2.33
+
+Minimum Komga version required: `0.113.0`
+
+### Fix
+
+* Open in WebView and Share options now open regular browser link instead of showing JSON
+* Note that Komga cannot be viewed using System WebView since there is no login prompt
+  However, opening in a regular browser works.
+
+## 1.2.32
+
+Minimum Komga version required: `0.113.0`
+
+### Fix
+
+* Source language, conventionally set to "en", is now changed to "all"
+* Downloaded files, if any, will have to be moved to new location
+    - `Komga (EN)` to `Komga (ALL)`
+    - `Komga (3) (EN)` to `Komga (3) (ALL)`
+
+## 1.2.31
+
+Minimum Komga version required: `0.113.0`
+
+### Refactor
+
+* replace Gson with kotlinx.serialization 
+
+## 1.2.30
+
+Minimum Komga version required: `0.113.0`
+
+### Features
+
+* display read list summary
+* display aggregated tags on series
+* search series by book tags
+
 ## 1.2.29
 
 Minimum Komga version required: `0.97.0`

@@ -5,8 +5,7 @@ ext {
     extName = 'keenspot'
     pkgNameSuffix = 'en.keenspot'
     extClass = '.KeenspotFactory'
-    extVersionCode = 2
-    libVersion = '1.2'
+    extVersionCode = 3
 }
 
 apply from: "$rootDir/common.gradle"

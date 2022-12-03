@@ -14,8 +14,8 @@ import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import java.text.ParseException
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -34,7 +34,6 @@ abstract class Zbulu(
         .build()
 
     override fun headersBuilder(): Headers.Builder = Headers.Builder()
-        .add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:75.0) Gecko/20100101 Firefox/75.0")
         .add("Content-Encoding", "identity")
 
     // Decreases calls, helps with Cloudflare
@@ -75,28 +74,20 @@ abstract class Zbulu(
     // Search
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val url = if (query.isNotBlank()) {
-            "$baseUrl/?s=$query"
-        } else {
-            lateinit var ret: String
-            lateinit var genre: String
-            filters.forEach { filter ->
-                when (filter) {
-                    is AuthorField -> {
-                        if (filter.state.isNotBlank()) {
-                            ret = "$baseUrl/author/${filter.state.replace(" ", "-")}/page-$page"
-                        }
-                    }
-                    is GenreFilter -> {
-                        if (filter.toUriPart().isNotBlank() && filter.state != 0) {
-                            filter.toUriPart().let { genre = if (it == "completed") "completed" else "genre/$it" }
-                            ret = "$baseUrl/$genre/page-$page"
-                        }
-                    }
-                }
+        val filterList = if (filters.isEmpty()) getFilterList() else filters
+        val authorFilter = filterList.find { it is AuthorFilter } as AuthorFilter
+        val genreFilter = filterList.find { it is GenreFilter } as GenreFilter
+
+        val url = when {
+            query.isNotBlank() -> "$baseUrl/?s=$query"
+            authorFilter.state.isNotBlank() -> "$baseUrl/author/${authorFilter.state.replace(" ", "-")}/page-$page"
+            genreFilter.state != 0 -> {
+                val genre = genreFilter.toUriPart().let { if (it == "completed") "completed" else "genre/$it" }
+                "$baseUrl/$genre/page-$page"
             }
-            ret
+            else -> "$baseUrl/manga-list/page-$page/"
         }
+
         return GET(url, headers)
     }
 
@@ -130,7 +121,7 @@ abstract class Zbulu(
 
     // Chapters
 
-    override fun chapterListSelector() = "div.go-border"
+    override fun chapterListSelector() = ".chapters-wrapper div.go-border, .items-chapters a"
 
     override fun chapterListParse(response: Response): List<SChapter> {
         val chapters = mutableListOf<SChapter>()
@@ -148,29 +139,48 @@ abstract class Zbulu(
 
     override fun chapterFromElement(element: Element): SChapter {
         return SChapter.create().apply {
-            element.select("a").let {
-                setUrlWithoutDomain(it.attr("href").addTrailingSlash())
-                name = it.text()
-            }
+            setUrlWithoutDomain(element.select("a").attr("href"))
+            name = element.select("h2").text()
             date_upload = element.select("div.chapter-date")?.text().toDate()
         }
     }
 
-    companion object {
-        val dateFormat by lazy {
-            SimpleDateFormat("MM/dd/yyyy", Locale.US)
-        }
-    }
-
     private fun String?.toDate(): Long {
-        return if (this.isNullOrEmpty()) {
-            0
+        if (this.isNullOrEmpty()) return 0L
+        val date = this
+        return if (date.contains("ago")) {
+            val value = date.split(' ')[0].toInt()
+            when {
+                "second" in date -> Calendar.getInstance().apply {
+                    add(Calendar.SECOND, value * -1)
+                }.timeInMillis
+                "minute" in date -> Calendar.getInstance().apply {
+                    add(Calendar.MINUTE, value * -1)
+                }.timeInMillis
+                "hour" in date -> Calendar.getInstance().apply {
+                    add(Calendar.HOUR_OF_DAY, value * -1)
+                }.timeInMillis
+                "day" in date -> Calendar.getInstance().apply {
+                    add(Calendar.DATE, value * -1)
+                }.timeInMillis
+                "week" in date -> Calendar.getInstance().apply {
+                    add(Calendar.DATE, value * 7 * -1)
+                }.timeInMillis
+                "month" in date -> Calendar.getInstance().apply {
+                    add(Calendar.MONTH, value * -1)
+                }.timeInMillis
+                "year" in date -> Calendar.getInstance().apply {
+                    add(Calendar.YEAR, value * -1)
+                }.timeInMillis
+                else -> {
+                    0L
+                }
+            }
         } else {
-            // In the event site displays invalid date
             try {
-                dateFormat.parse(this)?.time ?: 0
-            } catch (_: ParseException) {
-                0
+                dateFormat.parse(date)?.time ?: 0
+            } catch (_: Exception) {
+                0L
             }
         }
     }
@@ -179,7 +189,7 @@ abstract class Zbulu(
 
     override fun pageListParse(document: Document): List<Page> {
         return document.select("div.chapter-content img").mapIndexed { i, img ->
-            Page(i, "", img.attr("abs:src"))
+            Page(i, "", img.attr(if (img.hasAttr("data-src")) "abs:data-src" else "abs:src"))
         }
     }
 
@@ -187,13 +197,13 @@ abstract class Zbulu(
 
     // Filters
 
-    private class AuthorField : Filter.Text("Author")
+    private class AuthorFilter : Filter.Text("Author")
 
     override fun getFilterList() = FilterList(
         Filter.Header("Cannot combine search types!"),
         Filter.Header("Author name must be exact."),
-        Filter.Separator("-----------------"),
-        AuthorField(),
+        Filter.Separator(),
+        AuthorFilter(),
         GenreFilter()
     )
 
@@ -256,5 +266,11 @@ abstract class Zbulu(
     private open class UriPartFilter(displayName: String, val vals: Array<Pair<String, String>>) :
         Filter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
         fun toUriPart() = vals[state].second
+    }
+
+    companion object {
+        val dateFormat by lazy {
+            SimpleDateFormat("MM/dd/yyyy", Locale.US)
+        }
     }
 }

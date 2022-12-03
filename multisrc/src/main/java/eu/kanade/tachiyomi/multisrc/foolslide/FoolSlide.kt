@@ -1,10 +1,8 @@
 package eu.kanade.tachiyomi.multisrc.foolslide
 
 import android.app.Application
-import android.os.Build
 import androidx.preference.CheckBoxPreference
 import androidx.preference.PreferenceScreen
-import eu.kanade.tachiyomi.BuildConfig
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.ConfigurableSource
@@ -154,7 +152,7 @@ abstract class FoolSlide(
     }
 
     protected open fun parseChapterDate(date: String): Long? {
-        val lcDate = date.toLowerCase(Locale.ROOT)
+        val lcDate = date.lowercase(Locale.ROOT)
         if (lcDate.endsWith(" ago"))
             parseRelativeDate(lcDate)?.let { return it }
 

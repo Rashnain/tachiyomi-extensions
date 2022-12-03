@@ -1,6 +1,6 @@
 package eu.kanade.tachiyomi.extension.en.mangahere
 
-import com.squareup.duktape.Duktape
+import app.cash.quickjs.QuickJs
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.online.ParsedHttpSource
 import eu.kanade.tachiyomi.util.asJsoup
 import okhttp3.Cookie
 import okhttp3.CookieJar
+import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
@@ -33,6 +34,9 @@ class Mangahere : ParsedHttpSource() {
     override val lang = "en"
 
     override val supportsLatest = true
+
+    override fun headersBuilder(): Headers.Builder = Headers.Builder()
+        .add("Referer", baseUrl)
 
     override val client: OkHttpClient = super.client.newBuilder()
         .cookieJar(
@@ -93,6 +97,10 @@ class Mangahere : ParsedHttpSource() {
             when (filter) {
                 is TypeList -> url.addEncodedQueryParameter("type", types[filter.values[filter.state]].toString())
                 is CompletionList -> url.addEncodedQueryParameter("st", filter.state.toString())
+                is RatingList -> {
+                    url.addEncodedQueryParameter("rating_method", "gt")
+                    url.addEncodedQueryParameter("rating", filter.state.toString())
+                }
                 is GenreList -> {
                     val includeGenres = mutableSetOf<Int>()
                     val excludeGenres = mutableSetOf<Int>()
@@ -105,6 +113,18 @@ class Mangahere : ParsedHttpSource() {
                         addEncodedQueryParameter("nogenres", excludeGenres.joinToString(","))
                     }
                 }
+                is ArtistFilter -> {
+                    url.addEncodedQueryParameter("artist_method", "cw")
+                    url.addEncodedQueryParameter("artist", filter.state)
+                }
+                is AuthorFilter -> {
+                    url.addEncodedQueryParameter("author_method", "cw")
+                    url.addEncodedQueryParameter("author", filter.state)
+                }
+                is YearFilter -> {
+                    url.addEncodedQueryParameter("released_method", "eq")
+                    url.addEncodedQueryParameter("released", filter.state)
+                }
             }
         }
 
@@ -114,14 +134,6 @@ class Mangahere : ParsedHttpSource() {
             addEncodedQueryParameter("sort", null)
             addEncodedQueryParameter("stype", 1.toString())
             addEncodedQueryParameter("name", null)
-            addEncodedQueryParameter("author_method", "cw")
-            addEncodedQueryParameter("author", null)
-            addEncodedQueryParameter("artist_method", "cw")
-            addEncodedQueryParameter("artist", null)
-            addEncodedQueryParameter("rating_method", "eq")
-            addEncodedQueryParameter("rating", null)
-            addEncodedQueryParameter("released_method", "eq")
-            addEncodedQueryParameter("released", null)
         }
 
         return GET(url.toString(), headers)
@@ -142,7 +154,6 @@ class Mangahere : ParsedHttpSource() {
     override fun mangaDetailsParse(document: Document): SManga {
         val manga = SManga.create()
         manga.author = document.select(".detail-info-right-say > a")?.first()?.text()
-        manga.artist = ""
         manga.genre = document.select(".detail-info-right-tag-list > a")?.joinToString { it.text() }
         manga.description = document.select(".fullcontent")?.first()?.text()
         manga.thumbnail_url = document.select("img.detail-info-cover-img")?.first()
@@ -201,7 +212,7 @@ class Mangahere : ParsedHttpSource() {
 
     override fun pageListParse(document: Document): List<Page> {
         val bar = document.select("script[src*=chapter_bar]")
-        val duktape = Duktape.create()
+        val quickJs = QuickJs.create()
 
         /*
             function to drop last imageUrl if it's broken/unneccesary, working imageUrls are incremental (e.g. t001, t002, etc); if the difference between
@@ -225,16 +236,16 @@ class Mangahere : ParsedHttpSource() {
         // if-branch is for webtoon reader, else is for page-by-page
         return if (bar.isNotEmpty()) {
             val script = document.select("script:containsData(function(p,a,c,k,e,d))").html().removePrefix("eval")
-            val deobfuscatedScript = duktape.evaluate(script).toString()
+            val deobfuscatedScript = quickJs.evaluate(script).toString()
             val urls = deobfuscatedScript.substringAfter("newImgs=['").substringBefore("'];").split("','")
-            duktape.close()
+            quickJs.close()
 
             urls.mapIndexed { index, s -> Page(index, "", "https:$s") }
         } else {
             val html = document.html()
             val link = document.location()
 
-            var secretKey = extractSecretKey(html, duktape)
+            var secretKey = extractSecretKey(html, quickJs)
 
             val chapterIdStartLoc = html.indexOf("chapterid")
             val chapterId = html.substring(
@@ -249,13 +260,11 @@ class Mangahere : ParsedHttpSource() {
             val pageBase = link.substring(0, link.lastIndexOf("/"))
 
             IntRange(1, pagesNumber).map { i ->
-
                 val pageLink = "$pageBase/chapterfun.ashx?cid=$chapterId&page=$i&key=$secretKey"
 
                 var responseText = ""
 
                 for (tr in 1..3) {
-
                     val request = Request.Builder()
                         .url(pageLink)
                         .addHeader("Referer", link)
@@ -276,7 +285,7 @@ class Mangahere : ParsedHttpSource() {
                         secretKey = ""
                 }
 
-                val deobfuscatedScript = duktape.evaluate(responseText.removePrefix("eval")).toString()
+                val deobfuscatedScript = quickJs.evaluate(responseText.removePrefix("eval")).toString()
 
                 val baseLinkStartPos = deobfuscatedScript.indexOf("pix=") + 5
                 val baseLinkEndPos = deobfuscatedScript.indexOf(";", baseLinkStartPos) - 1
@@ -290,16 +299,15 @@ class Mangahere : ParsedHttpSource() {
             }
         }
             .dropLastIfBroken()
-            .also { duktape.close() }
+            .also { quickJs.close() }
     }
 
-    private fun extractSecretKey(html: String, duktape: Duktape): String {
-
+    private fun extractSecretKey(html: String, quickJs: QuickJs): String {
         val secretKeyScriptLocation = html.indexOf("eval(function(p,a,c,k,e,d)")
         val secretKeyScriptEndLocation = html.indexOf("</script>", secretKeyScriptLocation)
         val secretKeyScript = html.substring(secretKeyScriptLocation, secretKeyScriptEndLocation).removePrefix("eval")
 
-        val secretKeyDeobfuscatedScript = duktape.evaluate(secretKeyScript).toString()
+        val secretKeyDeobfuscatedScript = quickJs.evaluate(secretKeyScript).toString()
 
         val secretKeyStartLoc = secretKeyDeobfuscatedScript.indexOf("'")
         val secretKeyEndLoc = secretKeyDeobfuscatedScript.indexOf(";")
@@ -309,21 +317,30 @@ class Mangahere : ParsedHttpSource() {
             secretKeyEndLoc
         )
 
-        return duktape.evaluate(secretKeyResultScript).toString()
+        return quickJs.evaluate(secretKeyResultScript).toString()
     }
 
     override fun imageUrlParse(document: Document): String = throw UnsupportedOperationException("Not used")
 
     private class Genre(title: String, val id: Int) : Filter.TriState(title)
 
-    private class TypeList(types: Array<String>) : Filter.Select<String>("Type", types, 0)
+    private class TypeList(types: Array<String>) : Filter.Select<String>("Type", types, 1)
     private class CompletionList(completions: Array<String>) : Filter.Select<String>("Completed series", completions, 0)
+    private class RatingList(ratings: Array<String>) : Filter.Select<String>("Minimum rating", ratings, 0)
     private class GenreList(genres: List<Genre>) : Filter.Group<Genre>("Genres", genres)
+
+    private class ArtistFilter(name: String) : Filter.Text(name)
+    private class AuthorFilter(name: String) : Filter.Text(name)
+    private class YearFilter(name: String) : Filter.Text(name)
 
     override fun getFilterList() = FilterList(
         TypeList(types.keys.toList().sorted().toTypedArray()),
-        CompletionList(completions),
-        GenreList(genres())
+        ArtistFilter("Artist"),
+        AuthorFilter("Author"),
+        GenreList(genres()),
+        RatingList(ratings),
+        YearFilter("Year released"),
+        CompletionList(completions)
     )
 
     private val types = hashMapOf(
@@ -338,6 +355,7 @@ class Mangahere : ParsedHttpSource() {
     )
 
     private val completions = arrayOf("Either", "No", "Yes")
+    private val ratings = arrayOf("No Stars", "1 Star", "2 Stars", "3 Stars", "4 Stars", "5 Stars")
 
     private fun genres() = arrayListOf(
         Genre("Action", 1),

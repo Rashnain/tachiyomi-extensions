@@ -14,7 +14,6 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.util.Calendar
 
-
 // Based On TCBScans sources
 // MangaManiac is a network of sites built by Animemaniac.co.
 
@@ -36,7 +35,7 @@ abstract class MangaMainac(
     override fun popularMangaFromElement(element: Element): SManga {
         val manga = SManga.create()
         manga.thumbnail_url = element.select(".mangainfo_body > img").attr("src")
-        manga.url = "" //element.select("#primary-menu .menu-item:first-child").attr("href")
+        manga.url = "" // element.select("#primary-menu .menu-item:first-child").attr("href")
         manga.title = element.select(".intro_content h2").text()
         return manga
     }
@@ -70,8 +69,8 @@ abstract class MangaMainac(
     private fun substringextract(text: String, start: String, end: String): String = text.substringAfter(start).substringBefore(end).trim()
 
     private fun parseStatus(element: String): Int = when {
-        element.toLowerCase().contains("ongoing (pub") -> SManga.ONGOING
-        element.toLowerCase().contains("completed (pub") -> SManga.COMPLETED
+        element.lowercase().contains("ongoing (pub") -> SManga.ONGOING
+        element.lowercase().contains("completed (pub") -> SManga.COMPLETED
         else -> SManga.UNKNOWN
     }
 

@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.extension.en.myhentaigallery
 
-import eu.kanade.tachiyomi.annotations.Nsfw
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.asObservableSuccess
 import eu.kanade.tachiyomi.source.model.Filter
@@ -18,7 +17,6 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import rx.Observable
 
-@Nsfw
 class MyHentaiGallery : ParsedHttpSource() {
 
     override val name = "MyHentaiGallery"
@@ -113,7 +111,7 @@ class MyHentaiGallery : ParsedHttpSource() {
                 title = info.select("h1").text()
                 genre = info.select("div:containsOwn(categories) a").joinToString { it.text() }
                 artist = info.select("div:containsOwn(artists) a").text()
-                thumbnail_url = info.select("div.comic-cover img").attr("abs:src")
+                thumbnail_url = document.selectFirst(".comic-listing .comic-inner img")?.attr("src")
                 description = info.select("div:containsOwn(groups) a").let { groups ->
                     if (groups.isNotEmpty()) "Groups: ${groups.joinToString { it.text() }}\n" else ""
                 }

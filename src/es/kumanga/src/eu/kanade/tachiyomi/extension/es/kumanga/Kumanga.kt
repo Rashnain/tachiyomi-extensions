@@ -1,7 +1,6 @@
 package eu.kanade.tachiyomi.extension.es.kumanga
 
 import android.util.Base64
-import com.github.salomonbrys.kotson.jsonObject
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.model.Filter
@@ -79,7 +78,7 @@ class Kumanga : HttpSource() {
         val dt = body.select("#searchinput").attr("dt").toString()
         val kumangaTokenKey = encodeAndReverse(encodeAndReverse(dt))
             .replace("=", "k")
-            .toLowerCase(Locale.ROOT)
+            .lowercase(Locale.ROOT)
         kumangaToken = body.select("div.input-group [type=hidden]").attr(kumangaTokenKey)
         return kumangaToken
     }

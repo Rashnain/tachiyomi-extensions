@@ -7,7 +7,6 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.ParsedHttpSource
-import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -25,12 +24,13 @@ class KomikIndoID : ParsedHttpSource() {
     override val client: OkHttpClient = network.cloudflareClient
     private val dateFormat: SimpleDateFormat = SimpleDateFormat("MMM d, yyyy", Locale.US)
 
+    // similar/modified theme of "https://bacakomik.co"
     override fun popularMangaRequest(page: Int): Request {
-        return GET("$baseUrl/daftar-komik/page/$page/?order=popular", headers)
+        return GET("$baseUrl/daftar-manga/page/$page/?order=popular", headers)
     }
 
     override fun latestUpdatesRequest(page: Int): Request {
-        return GET("$baseUrl/daftar-komik/page/$page/?order=update", headers)
+        return GET("$baseUrl/daftar-manga/page/$page/?order=update", headers)
     }
 
     override fun popularMangaSelector() = "div.animepost"
@@ -55,10 +55,8 @@ class KomikIndoID : ParsedHttpSource() {
     }
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val builtUrl = if (page == 1) "$baseUrl/daftar-komik/" else "$baseUrl/daftar-komik/page/$page/?order="
-        val url = builtUrl.toHttpUrlOrNull()!!.newBuilder()
-        url.addQueryParameter("title", query)
-        url.addQueryParameter("page", page.toString())
+        val url = "$baseUrl/daftar-manga/page/$page/".toHttpUrlOrNull()!!.newBuilder()
+            .addQueryParameter("title", query)
         filters.forEach { filter ->
             when (filter) {
                 is AuthorFilter -> {
@@ -88,7 +86,7 @@ class KomikIndoID : ParsedHttpSource() {
                 }
             }
         }
-        return GET(url.build().toString(), headers)
+        return GET(url.toString(), headers)
     }
     override fun mangaDetailsParse(document: Document): SManga {
         val infoElement = document.select("div.infoanime").first()
@@ -112,8 +110,8 @@ class KomikIndoID : ParsedHttpSource() {
     }
 
     private fun parseStatus(element: String): Int = when {
-        element.toLowerCase().contains("berjalan") -> SManga.ONGOING
-        element.toLowerCase().contains("tamat") -> SManga.COMPLETED
+        element.contains("berjalan", true) -> SManga.ONGOING
+        element.contains("tamat", true) -> SManga.COMPLETED
         else -> SManga.UNKNOWN
     }
 
@@ -181,7 +179,7 @@ class KomikIndoID : ParsedHttpSource() {
         val pages = mutableListOf<Page>()
         var i = 0
         document.select("div.imgch img").forEach { element ->
-            val url = element.attr("src")
+            val url = element.attr("onError").substringAfter("src='").substringBefore("';")
             i++
             if (url.isNotEmpty()) {
                 pages.add(Page(i, "", url))

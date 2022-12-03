@@ -14,6 +14,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.Headers
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
@@ -33,6 +35,11 @@ class Japanread : ParsedHttpSource() {
     override val supportsLatest = true
 
     private val json: Json by injectLazy()
+
+    override val client: OkHttpClient = network.cloudflareClient
+
+    override fun headersBuilder(): Headers.Builder = Headers.Builder()
+        .add("Referer", "$baseUrl/")
 
     // Generic (used by popular/latest/search)
     private fun mangaListFromElement(element: Element): SManga {
@@ -108,9 +115,12 @@ class Japanread : ParsedHttpSource() {
         }
     }
 
-    private fun apiHeaders() = headersBuilder().apply {
-        add("Referer", baseUrl)
+    private fun apiHeaders(refererURL: String) = headers.newBuilder().apply {
+        set("Referer", refererURL)
         add("x-requested-with", "XMLHttpRequest")
+        // without this we get 404 but I don't know why, I cannot find any information about this 'a' header.
+        // In chrome the value is constantly changing on each request, but giving this fixed value seems to work
+        add("a", "1df19bce590b")
     }.build()
 
     // Chapters
@@ -229,7 +239,7 @@ class Japanread : ParsedHttpSource() {
     override fun pageListParse(document: Document): List<Page> {
         val chapterId = document.select("meta[data-chapter-id]").attr("data-chapter-id")
 
-        val apiRequest = GET("$baseUrl/api/?id=$chapterId&type=chapter", apiHeaders())
+        val apiRequest = GET("$baseUrl/api/?id=$chapterId&type=chapter", apiHeaders(document.location()))
         val apiResponse = client.newCall(apiRequest).execute()
 
         val jsonResult = json.parseToJsonElement(apiResponse.body!!.string()).jsonObject
@@ -237,14 +247,18 @@ class Japanread : ParsedHttpSource() {
         val baseImagesUrl = jsonResult["baseImagesUrl"]!!.jsonPrimitive.content
 
         return jsonResult["page_array"]!!.jsonArray.mapIndexed { i, jsonEl ->
-            Page(i, baseUrl, "$baseUrl$baseImagesUrl/${jsonEl.jsonPrimitive.content}")
+            Page(i, document.location(), "$baseUrl$baseImagesUrl/${jsonEl.jsonPrimitive.content}")
         }
     }
 
     override fun imageUrlParse(document: Document) = ""
 
     override fun imageRequest(page: Page): Request {
-        return GET(page.imageUrl!!, headers)
+        val newHeaders = headers.newBuilder()
+            .set("Referer", page.url)
+            .build()
+
+        return GET(page.imageUrl!!, newHeaders)
     }
 
     // Filters

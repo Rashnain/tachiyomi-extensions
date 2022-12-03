@@ -1,20 +1,21 @@
 package eu.kanade.tachiyomi.extension.en.shieldmanga
 
-import eu.kanade.tachiyomi.lib.ratelimit.RateLimitInterceptor
 import eu.kanade.tachiyomi.multisrc.madara.Madara
+import eu.kanade.tachiyomi.network.interceptor.rateLimit
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
-class ShieldManga : Madara("Shield Manga", "https://shieldmanga.club", "en") {
-    private val rateLimitInterceptor = RateLimitInterceptor(1)
+class ShieldManga : Madara("Shield Manga", "https://shieldmanga.io", "en") {
 
     override val client: OkHttpClient = network.cloudflareClient.newBuilder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
-        .addNetworkInterceptor(rateLimitInterceptor)
+        .rateLimit(1)
         .build()
 
-    override fun chapterListSelector() = "li.wp-manga-hapter, .version-chap li"
+    // The website does not flag the content.
+    override val useLoadMoreSearch = false
+    override val filterNonMangaItems = false
 
-    override val pageListParseSelector = "div.page-beak, .reading-content div"
+    override fun chapterListSelector() = "li.wp-manga-hapter, .version-chap li"
 }

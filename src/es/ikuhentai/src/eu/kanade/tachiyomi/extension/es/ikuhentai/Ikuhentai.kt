@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.extension.es.ikuhentai
 
-import eu.kanade.tachiyomi.annotations.Nsfw
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -15,7 +14,6 @@ import okhttp3.Request
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
-@Nsfw
 class Ikuhentai : ParsedHttpSource() {
     override val name = "Ikuhentai"
     override val baseUrl = "https://ikuhentai.net/"
@@ -132,8 +130,8 @@ class Ikuhentai : ParsedHttpSource() {
 
     private fun parseStatus(element: String): Int = when {
 
-        element.toLowerCase().contains("ongoing") -> SManga.ONGOING
-        element.toLowerCase().contains("completado") -> SManga.COMPLETED
+        element.lowercase().contains("ongoing") -> SManga.ONGOING
+        element.lowercase().contains("completado") -> SManga.COMPLETED
         else -> SManga.UNKNOWN
     }
 

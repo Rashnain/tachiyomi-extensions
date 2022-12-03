@@ -1,17 +1,12 @@
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
+apply plugin: 'kotlinx-serialization'
 
 ext {
     extName = 'GMANGA'
     pkgNameSuffix = 'ar.gmanga'
     extClass = '.Gmanga'
-    extVersionCode = 6
-    libVersion = '1.2'
-    containsNsfw = false
-}
-
-dependencies {
-    implementation project(':lib-ratelimit')
+    extVersionCode = 12
 }
 
 apply from: "$rootDir/common.gradle"

@@ -6,13 +6,8 @@ ext {
     extName = 'Muito Mangá'
     pkgNameSuffix = 'pt.muitomanga'
     extClass = '.MuitoManga'
-    extVersionCode = 3
-    libVersion = '1.2'
-    containsNsfw = true
-}
-
-dependencies {
-    implementation project(':lib-ratelimit')
+    extVersionCode = 6
+    isNsfw = true
 }
 
 apply from: "$rootDir/common.gradle"

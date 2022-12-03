@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.extension.it.hentaifantasy
 
-import eu.kanade.tachiyomi.annotations.Nsfw
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.model.Filter
@@ -20,7 +19,6 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.regex.Pattern
 
-@Nsfw
 class HentaiFantasy : ParsedHttpSource() {
     override val name = "HentaiFantasy"
 
@@ -78,7 +76,7 @@ class HentaiFantasy : ParsedHttpSource() {
                     filter.state
                         .filter { it.state }
                         .map {
-                            paths.add(it.name.toLowerCase().replace(" ", "_"))
+                            paths.add(it.name.lowercase().replace(" ", "_"))
                             it.id.toString()
                         }
                         .forEach { tags.add(it) }

@@ -1,8 +1,7 @@
 package eu.kanade.tachiyomi.extension.pt.brmangas
 
-import eu.kanade.tachiyomi.annotations.Nsfw
-import eu.kanade.tachiyomi.lib.ratelimit.RateLimitInterceptor
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.network.interceptor.rateLimit
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
@@ -17,7 +16,6 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.util.concurrent.TimeUnit
 
-@Nsfw
 class BrMangas : ParsedHttpSource() {
 
     override val name = "BR Mangás"
@@ -29,7 +27,7 @@ class BrMangas : ParsedHttpSource() {
     override val supportsLatest = true
 
     override val client: OkHttpClient = network.cloudflareClient.newBuilder()
-        .addInterceptor(RateLimitInterceptor(1, 2, TimeUnit.SECONDS))
+        .rateLimit(1, 2, TimeUnit.SECONDS)
         .build()
 
     override fun headersBuilder(): Headers.Builder = Headers.Builder()
@@ -95,6 +93,7 @@ class BrMangas : ParsedHttpSource() {
         val infoElement = document.select("div.serie-geral div.infoall").first()!!
 
         title = document.select("title").first().text().substringBeforeLast(" - ")
+        author = infoElement.select("div.serie-infos li:contains(Autor)").firstOrNull()?.ownText()
         genre = infoElement.select("a.category.tag").joinToString { it.text() }
         description = document.select("div.manga_sinopse ~ p").text().trim()
         thumbnail_url = infoElement.select("div.serie-capa img").first()!!.attr("src")

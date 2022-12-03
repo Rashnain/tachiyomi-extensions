@@ -6,12 +6,7 @@ ext {
     extName = 'Bruttal'
     pkgNameSuffix = 'pt.bruttal'
     extClass = '.Bruttal'
-    extVersionCode = 4
-    libVersion = '1.2'
-}
-
-dependencies {
-    implementation project(':lib-ratelimit')
+    extVersionCode = 6
 }
 
 apply from: "$rootDir/common.gradle"

@@ -9,16 +9,28 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.util.asJsoup
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
-import org.json.JSONArray
-import org.json.JSONObject
 import rx.Observable
+import uy.kohesive.injekt.injectLazy
+import java.text.SimpleDateFormat
+import java.util.Locale
 
 class Kuaikanmanhua : HttpSource() {
 
-    override val name = "Kuaikanmanhua"
+    override val name = "快看漫画"
+
+    override val id: Long = 8099870292642776005
 
     override val baseUrl = "https://www.kuaikanmanhua.com"
 
@@ -30,6 +42,8 @@ class Kuaikanmanhua : HttpSource() {
 
     private val apiUrl = "https://api.kkmh.com"
 
+    private val json: Json by injectLazy()
+
     // Popular
 
     override fun popularMangaRequest(page: Int): Request {
@@ -38,25 +52,25 @@ class Kuaikanmanhua : HttpSource() {
 
     override fun popularMangaParse(response: Response): MangasPage {
         val body = response.body!!.string()
-        val jsonList = JSONObject(body).getJSONObject("data").getJSONArray("topics")
+        val jsonList = json.parseToJsonElement(body).jsonObject["data"]!!
+            .jsonObject["topics"]!!
+            .jsonArray
         return parseMangaJsonArray(jsonList)
     }
 
-    private fun parseMangaJsonArray(jsonList: JSONArray, isSearch: Boolean = false): MangasPage {
-        val mangaList = mutableListOf<SManga>()
+    private fun parseMangaJsonArray(jsonList: JsonArray, isSearch: Boolean = false): MangasPage {
+        val mangaList = jsonList.map {
+            val mangaObj = it.jsonObject
 
-        for (i in 0 until jsonList.length()) {
-            val obj = jsonList.getJSONObject(i)
-            mangaList.add(
-                SManga.create().apply {
-                    title = obj.getString("title")
-                    thumbnail_url = obj.getString("vertical_image_url")
-                    url = "/web/topic/" + obj.getInt("id")
-                }
-            )
+            SManga.create().apply {
+                title = mangaObj["title"]!!.jsonPrimitive.content
+                thumbnail_url = mangaObj["vertical_image_url"]!!.jsonPrimitive.content
+                url = "/web/topic/" + mangaObj["id"]!!.jsonPrimitive.int
+            }
         }
+
         // KKMH does not have pages when you search
-        return MangasPage(mangaList, mangaList.size > 9 && !isSearch)
+        return MangasPage(mangaList, hasNextPage = mangaList.size > 9 && !isSearch)
     }
 
     // Latest
@@ -106,12 +120,12 @@ class Kuaikanmanhua : HttpSource() {
 
     override fun searchMangaParse(response: Response): MangasPage {
         val body = response.body!!.string()
-        val jsonObj = JSONObject(body).getJSONObject("data")
-        if (jsonObj.has("hit")) {
-            return parseMangaJsonArray(jsonObj.getJSONArray("hit"), true)
+        val jsonObj = json.parseToJsonElement(body).jsonObject["data"]!!.jsonObject
+        if (jsonObj["hit"] != null) {
+            return parseMangaJsonArray(jsonObj["hit"]!!.jsonArray, true)
         }
 
-        return parseMangaJsonArray(jsonObj.getJSONArray("topics"), false)
+        return parseMangaJsonArray(jsonObj["topics"]!!.jsonArray, false)
     }
 
     // Details
@@ -124,16 +138,16 @@ class Kuaikanmanhua : HttpSource() {
         return Observable.just(sManga)
     }
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val data = JSONObject(response.body!!.string()).getJSONObject("data")
-        val manga = SManga.create()
-        manga.title = data.getString("title")
-        manga.thumbnail_url = data.getString("vertical_image_url")
-        manga.author = data.getJSONObject("user").getString("nickname")
-        manga.description = data.getString("description")
-        manga.status = data.getInt("update_status_code")
+    override fun mangaDetailsParse(response: Response): SManga = SManga.create().apply {
+        val data = json.parseToJsonElement(response.body!!.string())
+            .jsonObject["data"]!!
+            .jsonObject
 
-        return manga
+        title = data["title"]!!.jsonPrimitive.content
+        thumbnail_url = data["vertical_image_url"]!!.jsonPrimitive.content
+        author = data["user"]!!.jsonObject["nickname"]!!.jsonPrimitive.content
+        description = data["description"]!!.jsonPrimitive.content
+        status = data["update_status_code"]!!.jsonPrimitive.int
     }
 
     // Chapters & Pages
@@ -146,26 +160,27 @@ class Kuaikanmanhua : HttpSource() {
     }
 
     override fun chapterListParse(response: Response): List<SChapter> {
-        val data = JSONObject(response.body!!.string()).getJSONObject("data")
-        val chaptersJson = data.getJSONArray("comics")
+        val data = json.parseToJsonElement(response.body!!.string())
+            .jsonObject["data"]!!
+            .jsonObject
+        val chaptersJson = data["comics"]!!.jsonArray
         val chapters = mutableListOf<SChapter>()
 
-        for (i in 0 until chaptersJson.length()) {
-            val obj = chaptersJson.getJSONObject(i)
+        for (i in 0 until chaptersJson.size) {
+            val obj = chaptersJson[i].jsonObject
             chapters.add(
                 SChapter.create().apply {
-                    url = "/v2/comic/" + obj.getString("id")
-                    name = obj.getString("title") +
-                        if (!obj.getBoolean("can_view")) {
+                    url = "/web/comic/" + obj["id"]!!.jsonPrimitive.content
+                    name = obj["title"]!!.jsonPrimitive.content +
+                        if (!obj["can_view"]!!.jsonPrimitive.boolean) {
                             " \uD83D\uDD12"
                         } else {
                             ""
                         }
-                    date_upload = obj.getLong("created_at") * 1000
+                    date_upload = obj["created_at"]!!.jsonPrimitive.long * 1000
                 }
             )
         }
-
         return chapters
     }
 
@@ -175,21 +190,42 @@ class Kuaikanmanhua : HttpSource() {
     }
 
     override fun pageListRequest(chapter: SChapter): Request {
-        if (chapter.name.endsWith("🔒")) {
-            throw Exception("[此章节为付费内容]")
-        }
-        return GET(apiUrl + chapter.url)
+        // if (chapter.name.endsWith("🔒")) {
+        //    throw Exception("[此章节为付费内容]")
+        // }
+        return GET(baseUrl + chapter.url)
+    }
+
+    val fixJson: (MatchResult) -> CharSequence = {
+        match: MatchResult ->
+        val str = match.value
+        val out = str[0] + "\"" + str.subSequence(1, str.length - 1) + "\"" + str[str.length - 1]
+        out
     }
 
     override fun pageListParse(response: Response): List<Page> {
-        val pages = ArrayList<Page>()
-        val data = JSONObject(response.body!!.string()).getJSONObject("data")
-        val pagesJson = data.getJSONArray("images")
+        val document = response.asJsoup()
+        val script = document.selectFirst("script:containsData(comicImages)").data()
+        val images = script.substringAfter("comicImages:")
+            .substringBefore(",is_vip_exclusive")
+            .replace("""(:([^\[\{\"]+?)[\},])""".toRegex(), fixJson)
+            .replace("""([,{]([^\[\{\"]+?)[\}:])""".toRegex(), fixJson)
+            .let { json.parseToJsonElement(it).jsonArray }
+        val variable = script.substringAfter("(function(")
+            .substringBefore("){")
+            .split(",")
+        val value = script.substringAfterLast("}}(")
+            .substringBefore("));")
+            .split(",")
 
-        for (i in 0 until pagesJson.length()) {
-            pages.add(Page(i, pagesJson.getString(i), pagesJson.getString(i)))
+        return images.mapIndexed { index, jsonEl ->
+            val urlVar = jsonEl.jsonObject["url"]!!.jsonPrimitive.content
+            val imageUrl = value[variable.indexOf(urlVar)]
+                .replace("\\u002F", "/")
+                .replace("\"", "")
+
+            Page(index, "", imageUrl)
         }
-        return pages
     }
 
     // Filters
@@ -247,5 +283,9 @@ class Kuaikanmanhua : HttpSource() {
 
     companion object {
         const val TOPIC_ID_SEARCH_PREFIX = "topic:"
+
+        private val DATE_FORMAT by lazy {
+            SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH)
+        }
     }
 }

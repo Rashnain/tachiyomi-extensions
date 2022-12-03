@@ -41,19 +41,20 @@ class Mangahasu : ParsedHttpSource() {
         .add("Referer", baseUrl)
 
     override fun popularMangaRequest(page: Int): Request =
-        GET("$baseUrl/directory.html?page=$page", headers)
+        GET("$baseUrl/most-popular.html?page=$page", headers)
 
     override fun latestUpdatesRequest(page: Int): Request =
         GET("$baseUrl/latest-releases.html?page=$page", headers)
 
-    override fun popularMangaSelector() = "div.div_item"
+    // Only selects popular of all time
+    override fun popularMangaSelector() = "div.right div.div_item"
 
     override fun latestUpdatesSelector() = "div.div_item"
 
     override fun popularMangaFromElement(element: Element): SManga {
         val manga = SManga.create()
         manga.thumbnail_url = element.select("img").first().attr("src")
-        element.select("a.name-manga").first().let {
+        element.select("a:has(h3.name-manga), a.name-manga").first().let {
             manga.setUrlWithoutDomain(it.attr("href"))
             manga.title = it.text()
         }
@@ -86,13 +87,30 @@ class Mangahasu : ParsedHttpSource() {
                         }
                     }
                 }
+                is OrderByFilter -> {
+                    filter.state?.let {
+                        var sortId = it.index
+
+                        // Increment for consistency
+                        when (sortId) {
+                            1 -> sortId += 1
+                            2 -> sortId += 2
+                        }
+
+                        val value = if (it.ascending) "${(sortId + 1)}" else "$sortId"
+
+                        url.addQueryParameter("orderby", value)
+                    }
+                }
+                else -> {
+                    // ignore
+                }
             }
         }
         return GET(url.toString(), headers)
     }
 
-    override fun searchMangaSelector() =
-        popularMangaSelector()
+    override fun searchMangaSelector() = latestUpdatesSelector()
 
     override fun searchMangaFromElement(element: Element): SManga =
         popularMangaFromElement(element)
@@ -104,11 +122,12 @@ class Mangahasu : ParsedHttpSource() {
         val infoElement = document.select(".info-c").first()
 
         val manga = SManga.create()
-        manga.author = infoElement.select(".info")[0].text()
-        manga.artist = infoElement.select(".info")[1].text()
-        manga.genre = infoElement.select(".info")[3].text()
+        manga.author = isUpdating(infoElement.select(".info")[0].text())
+        manga.artist = isUpdating(infoElement.select(".info")[1].text())
+        manga.genre = isUpdating(infoElement.select(".info")[3].text())
         manga.status = parseStatus(infoElement.select(".info")[4].text())
-        manga.description = document.select("div.content-info:has(h3:contains(summary)) div").first()?.text()
+        manga.description =
+            document.select("div.content-info:has(h3:contains(summary)) div").first()?.text()
         manga.thumbnail_url = document.select("div.info-img img").attr("src")
         return manga
     }
@@ -119,12 +138,17 @@ class Mangahasu : ParsedHttpSource() {
         else -> SManga.UNKNOWN
     }
 
+    private fun isUpdating(string: String): String {
+        return if (string == "Updating...") "" else string
+    }
+
     override fun chapterListSelector() = "tbody tr"
 
     override fun chapterFromElement(element: Element): SChapter {
         val urlElement = element.select("a").first()
         val chapter = SChapter.create()
         chapter.setUrlWithoutDomain(urlElement.attr("href"))
+        urlElement.select("span.name-manga").remove()
         chapter.name = urlElement.text()
 
         chapter.date_upload = element.select(".date-updated").last()?.text()?.let {
@@ -149,7 +173,7 @@ class Mangahasu : ParsedHttpSource() {
         // Some images are place holders on new chapters.
 
         val pageList = document.select("div.img img")
-            .mapIndexed { i, el ->
+            .mapIndexed { _, el ->
                 val pageNumber = el.attr("class").substringAfter("page").toInt()
                 Page(pageNumber, "", el.attr("src"))
             }
@@ -189,6 +213,7 @@ class Mangahasu : ParsedHttpSource() {
     override fun getFilterList() = FilterList(
         AuthorFilter(),
         ArtistFilter(),
+        OrderByFilter(),
         StatusFilter(),
         TypeFilter(),
         GenreFilter(getGenreList())
@@ -213,6 +238,16 @@ class Mangahasu : ParsedHttpSource() {
         )
     )
 
+    private class OrderByFilter : Filter.Sort(
+        "Order By",
+        arrayOf(
+            "Updated",
+            "Views",
+            "Subscribers",
+        ),
+        Selection(0, false)
+    )
+
     private class StatusFilter : UriPartFilter(
         "Status",
         arrayOf(
@@ -224,6 +259,7 @@ class Mangahasu : ParsedHttpSource() {
 
     private class Genre(name: String, val id: String) : Filter.TriState(name)
     private class GenreFilter(genres: List<Genre>) : Filter.Group<Genre>("Genres", genres)
+
     private fun getGenreList() = listOf(
         Genre("4-koma", "46"),
         Genre("Action", "1"),
