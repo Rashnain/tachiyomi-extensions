@@ -6,7 +6,6 @@ ext {
     pkgNameSuffix = 'fr.scantrad'
     extClass = '.Scantrad'
     extVersionCode = 19
-    libVersion = '1.2'
 }
 
 dependencies {
