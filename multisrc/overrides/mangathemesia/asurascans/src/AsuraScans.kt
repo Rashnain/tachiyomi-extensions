@@ -9,8 +9,11 @@ import eu.kanade.tachiyomi.network.interceptor.rateLimit
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
+import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SManga
 import okhttp3.OkHttpClient
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 import rx.Observable
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
@@ -34,6 +37,7 @@ open class AsuraScans(
     }
 
     override val client: OkHttpClient = network.cloudflareClient.newBuilder()
+        .addInterceptor(uaIntercept)
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .rateLimit(1, 3, TimeUnit.SECONDS)
@@ -50,6 +54,20 @@ open class AsuraScans(
 
     override fun fetchSearchManga(page: Int, query: String, filters: FilterList): Observable<MangasPage> {
         return super.fetchSearchManga(page, query, filters).tempUrlToPermIfNeeded()
+    }
+
+    // Skip scriptPages
+    override fun pageListParse(document: Document): List<Page> {
+        return document.select(pageSelector)
+            .filterNot { it.attr("src").isNullOrEmpty() }
+            .mapIndexed { i, img -> Page(i, "", img.attr("abs:src")) }
+    }
+
+    override fun Element.imgAttr(): String = when {
+        hasAttr("data-lazy-src") -> attr("abs:data-lazy-src")
+        hasAttr("data-src") -> attr("abs:data-src")
+        hasAttr("data-cfsrc") -> attr("abs:data-cfsrc")
+        else -> attr("abs:src")
     }
 
     private fun Observable<MangasPage>.tempUrlToPermIfNeeded(): Observable<MangasPage> {
@@ -86,7 +104,9 @@ open class AsuraScans(
                     .commit()
             }
         }
+
         screen.addPreference(permanentMangaUrlPref)
+        addRandomAndCustomUserAgentPreferences(screen)
     }
 
     private fun getPermanentMangaUrlPreferenceKey(): String {
